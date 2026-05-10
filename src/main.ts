@@ -476,7 +476,11 @@ if (profileRoot) {
 
 const calendarRoot = document.querySelector('#calendar-root');
 let _calendarApp = null;
-let calendarApi = {
+let calendarApi: {
+  reload?: () => void;
+  prefillQuickEvent?: (email?: string) => void;
+  applyRemoteChange?: (detail: { type?: string; payload?: unknown }) => void;
+} = {
   reload() {},
   prefillQuickEvent() {},
 };
@@ -576,7 +580,18 @@ const _feCalendarChanged = () => {
   calendarApi.reload?.();
 };
 
-const _feCalendarEventChanged = () => {
+const _feCalendarEventChanged = (event: Event) => {
+  // websocket-updater dispatches `{ type, payload }` for calendar event
+  // notifications. If the calendar component exposes applyRemoteChange,
+  // hand the typed detail to it so it can merge a single change without
+  // a full re-fetch (e.g. delete a known event from local state). Older
+  // dispatches (no detail) and the create/update fallback still trigger
+  // a full reload via the component's internal handling.
+  const detail = (event as CustomEvent<{ type?: string; payload?: unknown }>).detail;
+  if (detail && typeof detail === 'object' && calendarApi.applyRemoteChange) {
+    calendarApi.applyRemoteChange(detail);
+    return;
+  }
   calendarApi.reload?.();
 };
 

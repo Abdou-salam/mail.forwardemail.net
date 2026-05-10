@@ -68,6 +68,9 @@
   interface CalendarApi {
     open?: () => void;
     refresh?: () => void;
+    reload?: () => void;
+    prefillQuickEvent?: (email?: string) => void;
+    applyRemoteChange?: (detail: { type?: string; payload?: unknown }) => void;
   }
 
   interface Props {
@@ -313,6 +316,42 @@
   let lastDurationMinutes = 60;
   let modalAnnouncement = $state('');
 
+  // The user's IANA timezone (e.g. "America/New_York"). Stamped onto every
+  // new/edited event so downstream devices can reproduce the original wall
+  // clock — see iCalendar TZID handling in generateICalEvent.
+  const getDefaultTimezone = () => {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    } catch {
+      return 'UTC';
+    }
+  };
+
+  // Wall-clock formatter: produces YYYYMMDDTHHMMSS rendered in the given
+  // IANA tz. Used with DTSTART;TZID=<tz>:<wallClock> instead of the legacy
+  // DTSTART:<utc>Z, so events round-trip across devices without DST/TZ
+  // drift. en-CA gives YYYY-MM-DD parts; hour12 false yields 00–23.
+  const formatICalLocal = (iso: string | undefined, tzid: string): string => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (!Number.isFinite(d.getTime())) return '';
+    const fmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tzid,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+    const parts = fmt.formatToParts(d);
+    const get = (t: string) => parts.find((p) => p.type === t)?.value || '';
+    // Intl can return "24" for midnight on some browsers — clamp to "00".
+    const hour = get('hour') === '24' ? '00' : get('hour');
+    return `${get('year')}${get('month')}${get('day')}T${hour}${get('minute')}${get('second')}`;
+  };
+
   let newEvent = $state({
     calendarId: '',
     title: '',
@@ -328,7 +367,7 @@
     description: '',
     location: '',
     url: '',
-    timezone: '',
+    timezone: getDefaultTimezone(),
     attendees: '',
     notify: 0,
     componentType: 'VEVENT' as 'VEVENT' | 'VTODO',
@@ -353,7 +392,7 @@
     description: '',
     location: '',
     url: '',
-    timezone: '',
+    timezone: getDefaultTimezone(),
     attendees: '',
     notify: 0,
     componentType: 'VEVENT',
@@ -938,9 +977,16 @@
       const date = new Date(d);
       return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     };
-    const dtstart = formatICalDate(start);
-    const dtend = formatICalDate(end);
     const dtstamp = formatICalDate(new Date().toISOString());
+    // When a timezone is set, emit the wall-clock as DTSTART;TZID=<tz>:...
+    // (no Z). This preserves the creator's intent — "3pm in NY" stays at
+    // "3pm in NY" across DST and on devices in other zones. Falling back
+    // to bare UTC zulu loses that wall-clock anchor and is the cause of
+    // the cross-device time-drift bug.
+    const useTzid = Boolean(timezone) && timezone !== 'UTC';
+    const tzParam = useTzid ? `;TZID=${escape(timezone as string)}` : '';
+    const dtstart = useTzid ? formatICalLocal(start, timezone as string) : formatICalDate(start);
+    const dtend = useTzid ? formatICalLocal(end, timezone as string) : formatICalDate(end);
     const eventUid = uid || `${Date.now()}@forwardemail.net`;
     const escape = (val: string) =>
       (val || '')
@@ -957,14 +1003,13 @@
       'BEGIN:VEVENT',
       `UID:${eventUid}`,
       `DTSTAMP:${dtstamp}`,
-      `DTSTART:${dtstart}`,
-      `DTEND:${dtend}`,
+      `DTSTART${tzParam}:${dtstart}`,
+      `DTEND${tzParam}:${dtend}`,
       `SUMMARY:${escape(summary || 'Untitled Event')}`,
     ];
     if (description) lines.push(`DESCRIPTION:${escape(description)}`);
     if (location) lines.push(`LOCATION:${escape(location)}`);
     if (url) lines.push(`URL:${escape(url)}`);
-    if (timezone) lines.push(`TZID:${escape(timezone)}`);
     // Emit RRULE when the user picked a recurrence. buildRrule returns
     // '' for mode==='none' and the rawRrule verbatim for mode==='custom'
     // so unrecognized rules round-trip unchanged.
@@ -1057,15 +1102,18 @@
       `DTSTAMP:${formatICalDate(new Date().toISOString())}`,
       `SUMMARY:${escape(summary || 'Untitled Task')}`,
     ];
-    const dtstart = formatICalDate(start);
-    const dueDate = formatICalDate(due);
+    // See generateICalEvent for the TZID rationale — same wall-clock anchor
+    // applies to VTODO DTSTART/DUE.
+    const useTzid = Boolean(timezone) && timezone !== 'UTC';
+    const tzParam = useTzid ? `;TZID=${escape(timezone as string)}` : '';
+    const dtstart = useTzid ? formatICalLocal(start, timezone as string) : formatICalDate(start);
+    const dueDate = useTzid ? formatICalLocal(due, timezone as string) : formatICalDate(due);
     const completed = formatICalDate(completedAt);
-    if (dtstart) lines.push(`DTSTART:${dtstart}`);
-    if (dueDate) lines.push(`DUE:${dueDate}`);
+    if (dtstart) lines.push(`DTSTART${tzParam}:${dtstart}`);
+    if (dueDate) lines.push(`DUE${tzParam}:${dueDate}`);
     if (description) lines.push(`DESCRIPTION:${escape(description)}`);
     if (location) lines.push(`LOCATION:${escape(location)}`);
     if (url) lines.push(`URL:${escape(url)}`);
-    if (timezone) lines.push(`TZID:${escape(timezone)}`);
     if (status) lines.push(`STATUS:${escape(status.toUpperCase())}`);
     if (typeof percentComplete === 'number' && Number.isFinite(percentComplete)) {
       lines.push(`PERCENT-COMPLETE:${Math.max(0, Math.min(100, Math.round(percentComplete)))}`);
@@ -1121,7 +1169,7 @@
           description: (event.description as string) || '',
           location: (event.location as string) || '',
           url: (event.url as string) || '',
-          timezone: (event.timezone as string) || '',
+          timezone: (event.timezone as string) || getDefaultTimezone(),
           start: event.start as string,
           due: (event.end as string) || (event.start as string),
           uid: event.id as string,
@@ -1134,7 +1182,7 @@
           description: (event.description as string) || '',
           location: (event.location as string) || '',
           url: (event.url as string) || '',
-          timezone: (event.timezone as string) || '',
+          timezone: (event.timezone as string) || getDefaultTimezone(),
           attendees: (event.attendees as string) || '',
           start: event.start as string,
           end: event.end as string,
@@ -1196,7 +1244,7 @@
             description: description || '',
             location: location || '',
             url: url || '',
-            timezone: timezone || '',
+            timezone: timezone || getDefaultTimezone(),
             attendees: '',
             start: start?.toISOString?.() || '',
             end: end?.toISOString?.() || '',
@@ -1724,7 +1772,7 @@
         description: e.description || e.notes || '',
         location: e.location || '',
         url: e.url || '',
-        timezone: e.timezone || '',
+        timezone: e.timezone || getDefaultTimezone(),
         attendees: e.attendees || '',
         notify: e.notify || e.reminder || 0,
         componentType,
@@ -2359,7 +2407,7 @@
       description: '',
       location: '',
       url: '',
-      timezone: '',
+      timezone: getDefaultTimezone(),
       attendees: '',
       notify: 0,
       componentType,
@@ -2582,7 +2630,7 @@
       description: email ? `Follow up with ${email}` : '',
       location: '',
       url: '',
-      timezone: '',
+      timezone: getDefaultTimezone(),
       attendees: '',
       notify: 0,
       componentType: 'VEVENT',
@@ -2686,7 +2734,7 @@
             description: description || '',
             location: location || '',
             url: url || '',
-            timezone: timezone || '',
+            timezone: timezone || getDefaultTimezone(),
             start: startISO,
             due: endISO,
             status: 'NEEDS-ACTION',
@@ -2697,7 +2745,7 @@
             description: description || '',
             location: location || '',
             url: url || '',
-            timezone: timezone || '',
+            timezone: timezone || getDefaultTimezone(),
             attendees: attendees || '',
             start: startISO,
             end: endISO,
@@ -2861,7 +2909,7 @@
       description: (fullEvent.description as string) || '',
       location: (fullEvent.location as string) || '',
       url: (fullEvent.url as string) || '',
-      timezone: (fullEvent.timezone as string) || '',
+      timezone: (fullEvent.timezone as string) || getDefaultTimezone(),
       attendees: (fullEvent.attendees as string) || '',
       notify:
         (fullEvent.notify as number) ||
@@ -2969,7 +3017,7 @@
             description: description || '',
             location: location || '',
             url: url || '',
-            timezone: timezone || '',
+            timezone: timezone || getDefaultTimezone(),
             start: startISO,
             due: endISO,
             uid: id,
@@ -2983,7 +3031,7 @@
             description: description || '',
             location: location || '',
             url: url || '',
-            timezone: timezone || '',
+            timezone: timezone || getDefaultTimezone(),
             attendees: attendees || '',
             start: startISO,
             end: endISO,
@@ -3100,7 +3148,7 @@
         description: (task.description as string) || '',
         location: (task.location as string) || '',
         url: (task.url as string) || '',
-        timezone: (task.timezone as string) || '',
+        timezone: (task.timezone as string) || getDefaultTimezone(),
         start: (task.start as string) || '',
         due: (task.end as string) || (task.start as string) || '',
         uid: (task.id as string) || editEvent.id,
@@ -3564,9 +3612,36 @@
       }
     }
 
+    // Granular merge for remote (websocket-driven) calendar changes. DELETE
+    // is the only one we can do without a server-side payload upgrade — the
+    // event id is present in the WS notification, so we just remove it from
+    // local state without a full re-fetch. CREATE / UPDATE fall through to
+    // load() until the server starts including event bodies in the WS push.
+    const applyRemoteChange = (detail: { type?: string; payload?: unknown }) => {
+      const t = detail?.type;
+      const data = detail?.payload as Record<string, unknown> | undefined;
+      if (!t || !data) {
+        load().catch(() => {});
+        return;
+      }
+      if (t === 'calendarEventDeleted') {
+        const id = (data.event_id || data.uid || data.id) as string | undefined;
+        if (id) {
+          allEvents = allEvents.filter((ev) => {
+            const e = ev as Record<string, unknown>;
+            return e.id !== id && e.uid !== id;
+          });
+          applySelectedEvents();
+          return;
+        }
+      }
+      load().catch(() => {});
+    };
+
     registerApi?.({
       reload: load,
       prefillQuickEvent,
+      applyRemoteChange,
     } as unknown as CalendarApi);
     if (isActive) {
       load();

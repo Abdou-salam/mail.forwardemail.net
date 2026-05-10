@@ -86,9 +86,12 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Install Appium 2 + UiAutomator2 driver
+        # Pin uiautomator2 to 4.2.9 — the last release whose appium peerDep
+        # accepts Appium 2.x. Versions ≥5.0.0 require Appium ^3.0.0-rc.2,
+        # which is still RC. Bump together when Appium 3 ships stable.
         run: |
           npm install -g appium@^2
-          appium driver install uiautomator2
+          appium driver install uiautomator2@4.2.9
 
       - name: Initialize Android project
         run: pnpm tauri android init

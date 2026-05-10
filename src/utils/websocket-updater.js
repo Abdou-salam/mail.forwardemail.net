@@ -308,7 +308,11 @@ function createWebSocketUpdater() {
           wsUnsubs.push(
             wsClient.on(evt, (data) => {
               if (data && typeof data === 'object') {
-                dispatchFrozen('fe:calendar-event-changed', data);
+                // Carry the WS event name forward as `type` so downstream
+                // handlers can do granular merges (e.g. apply-only-this-delete
+                // without a full calendar refetch). Existing handlers that
+                // ignore `type` keep working — they just trigger reload().
+                dispatchFrozen('fe:calendar-event-changed', { type: evt, payload: data });
               }
             }),
           );
