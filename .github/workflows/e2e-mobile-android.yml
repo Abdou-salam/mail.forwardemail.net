@@ -1,0 +1,160 @@
+name: E2E Mobile (Android)
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # 06:00 UTC nightly
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-mobile-android-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+  PNPM_VERSION: '9'
+
+jobs:
+  android-e2e:
+    runs-on: ubuntu-22.04
+    name: Android E2E (API 34, x86_64)
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # KVM acceleration is required for the Android emulator on Linux runners.
+      # Without it the emulator falls back to software rendering and tests
+      # take 5–10× longer (and frequently time out).
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install Linux dependencies
+        run: |
+          for i in 1 2 3; do
+            if sudo apt-get update; then break; fi
+            sleep $((i*5))
+          done
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libssl-dev \
+            patchelf
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Rust toolchain (Android x86_64 only)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-linux-android
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: e2e-android
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        run: sdkmanager "ndk;27.0.12077973"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Install root dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install e2e-mobile dependencies
+        working-directory: e2e-mobile
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Appium 2 + UiAutomator2 driver
+        run: |
+          npm install -g appium@^2
+          appium driver install uiautomator2
+
+      - name: Initialize Android project
+        run: pnpm tauri android init
+
+      - name: Build Android APK (debug, x86_64)
+        env:
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
+        run: pnpm tauri android build --apk --debug --target x86_64
+
+      - name: Run E2E in emulator
+        id: emulator-test
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          script: |
+            set -euo pipefail
+            APK_PATH="$(find src-tauri/gen/android/app/build/outputs/apk -name '*.apk' -path '*x86_64*' | head -n1)"
+            if [ -z "$APK_PATH" ]; then
+              echo "::error::No APK found under src-tauri/gen/android/app/build/outputs/apk"
+              exit 1
+            fi
+            APK_PATH="$(realpath "$APK_PATH")"
+            echo "Using APK: $APK_PATH"
+            export APK_PATH
+
+            appium --port 4723 > appium.log 2>&1 &
+            APPIUM_PID=$!
+            trap 'kill $APPIUM_PID 2>/dev/null || true' EXIT
+
+            # Wait for Appium to be ready (max 30s).
+            for i in $(seq 1 30); do
+              if curl -sf http://127.0.0.1:4723/status > /dev/null; then break; fi
+              sleep 1
+            done
+
+            cd e2e-mobile
+            pnpm test
+
+      - name: Upload Appium log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: appium-log
+          path: appium.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-e2e-reports-api34
+          path: e2e-mobile/reports/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload failure screenshots
+        if: ${{ steps.emulator-test.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-e2e-screenshots-api34
+          path: e2e-mobile/screenshots/
+          if-no-files-found: ignore
+          retention-days: 7

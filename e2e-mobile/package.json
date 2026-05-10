@@ -1,0 +1,17 @@
+{
+  "name": "@forwardemail/e2e-mobile",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Android (and later iOS) E2E tests via Vitest + raw webdriverio + Appium 2",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2",
+    "vitest": "^3.2.4",
+    "webdriverio": "^9.5.5"
+  }
+}

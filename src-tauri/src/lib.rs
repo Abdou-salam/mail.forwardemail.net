@@ -663,6 +663,11 @@ pub fn run() {
             .plugin(tauri_plugin_global_shortcut::Builder::new().build());
     }
 
+    #[cfg(all(desktop, feature = "webdriver"))]
+    {
+        builder = builder.plugin(tauri_plugin_webdriver::init());
+    }
+
     builder
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_deep_link::init())

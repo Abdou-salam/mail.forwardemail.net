@@ -3,6 +3,10 @@ node_modules
 coverage
 playwright-report
 test-results
+e2e-webview/reports
+e2e-webview/screenshots
+e2e-mobile/reports
+e2e-mobile/screenshots
 .vites
 .DS_Store
 vite.config.js.timestamp*

@@ -82,6 +82,21 @@ export default [
     },
   },
   {
+    // E2E harnesses use Vitest (imports describe/it/expect explicitly) plus
+    // the `webdriverio` package, which augments the ambient `WebdriverIO`
+    // namespace (e.g. `WebdriverIO.Browser`, `WebdriverIO.Capabilities`).
+    // TS resolves those correctly via the package's ambient declarations,
+    // but ESLint's no-undef can't see TS-only namespaces — disable it here
+    // (typescript-eslint's official recommendation for TS files).
+    files: ['e2e-webview/**/*.ts', 'e2e-mobile/**/*.ts'],
+    languageOptions: {
+      globals: { ...globals.node },
+    },
+    rules: {
+      'no-undef': 'off',
+    },
+  },
+  {
     files: ['**/*.svelte'],
     languageOptions: {
       parser: svelteParser,

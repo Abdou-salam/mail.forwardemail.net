@@ -1,0 +1,188 @@
+name: E2E WebView (Desktop)
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+    paths:
+      - 'src-tauri/**'
+      - 'src/**'
+      - 'e2e-webview/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/e2e-webview.yml'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-webview-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+  PNPM_VERSION: '9'
+
+jobs:
+  webview-e2e:
+    if: github.event.pull_request.draft == false || github.event_name != 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            label: linux-22
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            label: linux-24
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            label: windows-x64
+          # macOS rows are gated to push:main / workflow_dispatch only — the
+          # `gate` step short-circuits all subsequent work on pull_request,
+          # leaving only the runner spin-up (~30 s) as cost. macOS runners
+          # are 10× the price of Linux, so this materially cuts CI bill on a
+          # busy PR queue. Re-evaluate after the suite has been green for two
+          # weeks.
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            label: macos-x64
+            push_only: true
+          - os: macos-15
+            target: aarch64-apple-darwin
+            label: macos-arm64
+            push_only: true
+    runs-on: ${{ matrix.os }}
+    name: WebView E2E (${{ matrix.label }})
+    timeout-minutes: 45
+
+    steps:
+      - name: Gate macOS rows on PR
+        id: gate
+        shell: bash
+        run: |
+          if [ "${{ matrix.push_only }}" = "true" ] && [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping ${{ matrix.label }} on PR (cost gating). Will run on push to main."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.gate.outputs.skip != 'true'
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: steps.gate.outputs.skip != 'true' && runner.os == 'Linux'
+        run: |
+          for i in 1 2 3; do
+            if sudo apt-get update; then break; fi
+            sleep $((i*5))
+          done
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            libgtk-3-dev \
+            webkit2gtk-driver \
+            xvfb
+
+      - name: Install Rust toolchain
+        if: steps.gate.outputs.skip != 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        if: steps.gate.outputs.skip != 'true'
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: e2e-webview-${{ matrix.label }}
+
+      - name: Setup Node.js
+        if: steps.gate.outputs.skip != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        if: steps.gate.outputs.skip != 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Install root dependencies
+        if: steps.gate.outputs.skip != 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Install e2e-webview dependencies
+        if: steps.gate.outputs.skip != 'true'
+        working-directory: e2e-webview
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache tauri-webdriver intermediary
+        if: steps.gate.outputs.skip != 'true'
+        id: cache-twd
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/tauri-webdriver
+            ~/.cargo/bin/tauri-webdriver.exe
+          key: ${{ runner.os }}-${{ runner.arch }}-tauri-webdriver-v0.1.1
+
+      - name: Install tauri-webdriver intermediary
+        if: steps.gate.outputs.skip != 'true' && steps.cache-twd.outputs.cache-hit != 'true'
+        run: cargo install tauri-webdriver --locked
+
+      - name: Build Tauri binary with webdriver feature
+        if: steps.gate.outputs.skip != 'true'
+        # `tauri build --debug` (not plain cargo build) is required so
+        # frontendDist is embedded — otherwise the WebView fails with
+        # AssetNotFound("index.html") at runtime. --no-bundle skips the
+        # DMG/MSI step we don't need for tests.
+        run: pnpm exec tauri build --debug --no-bundle --features webdriver --target ${{ matrix.target }}
+
+      - name: Run E2E tests (Linux + Xvfb)
+        id: test-linux
+        if: steps.gate.outputs.skip != 'true' && runner.os == 'Linux'
+        continue-on-error: true
+        working-directory: e2e-webview
+        shell: bash
+        env:
+          TAURI_TARGET: ${{ matrix.target }}
+        run: xvfb-run --auto-servernum -- pnpm test
+
+      - name: Run E2E tests (macOS / Windows)
+        id: test-other
+        if: steps.gate.outputs.skip != 'true' && runner.os != 'Linux'
+        continue-on-error: true
+        working-directory: e2e-webview
+        shell: bash
+        env:
+          TAURI_TARGET: ${{ matrix.target }}
+        run: pnpm test
+
+      - name: Upload test reports
+        if: always() && steps.gate.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-webview-${{ matrix.label }}-reports
+          path: e2e-webview/reports/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload failure screenshots
+        if: ${{ steps.gate.outputs.skip != 'true' && (steps.test-linux.outcome == 'failure' || steps.test-other.outcome == 'failure') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-webview-${{ matrix.label }}-screenshots
+          path: e2e-webview/screenshots/
+          if-no-files-found: ignore
+          retention-days: 7

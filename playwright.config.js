@@ -5,14 +5,13 @@ import { defineConfig, devices } from '@playwright/test';
  *
  *   tests/e2e/smoke/          — runs on every project (web + desktop + mobile)
  *   tests/e2e/adapters/web    — browser-only (PWA, SW, mailto, clipboard)
- *   tests/e2e/adapters/tauri  — Tauri-only (IPC, notifications, fs, deep-link)
  *   tests/e2e/*.spec.js       — legacy full-flow suites (desktop chromium only)
  *
- * The `TAURI_E2E_BINARY` env var must be set for the tauri-* projects to run
- * against a real Tauri binary. Otherwise those suites are skipped.
+ * Native-WebView coverage (real WKWebView/WebView2/WebKitGTK/Android System
+ * WebView) lives in `e2e-webview/` and `e2e-mobile/`, driven by WebdriverIO —
+ * Playwright cannot drive Tauri's native WebViews.
  */
 
-const runTauri = Boolean(process.env.TAURI_E2E_BINARY);
 const runWebkit = process.env.PW_RUN_WEBKIT === '1';
 const runFirefox = process.env.PW_RUN_FIREFOX === '1';
 
@@ -42,7 +41,6 @@ export default defineConfig({
     {
       name: 'web-chromium',
       use: { ...devices['Desktop Chrome'] },
-      testIgnore: [/adapters\/tauri/, /tauri\//],
     },
     ...(runFirefox
       ? [
@@ -70,7 +68,6 @@ export default defineConfig({
       name: 'mobile-android-web',
       use: { ...devices['Pixel 7'] },
       testMatch: [/smoke\//, /mailbox\.spec/, /adapters\/web\//],
-      testIgnore: [/adapters\/tauri/, /tauri\//],
     },
     {
       name: 'mobile-ios-web',
@@ -81,19 +78,8 @@ export default defineConfig({
       // for the mailbox flow. Dedicated iOS mailbox coverage needs a proper
       // investigation of the WebKit-specific gaps and is tracked separately.
       testMatch: [/smoke\//, /adapters\/web\//],
-      testIgnore: [/adapters\/tauri/, /tauri\//, /mailbox\.spec/],
+      testIgnore: [/mailbox\.spec/],
     },
-
-    // --------------- Tauri (desktop binary) ---------------------------------
-    ...(runTauri
-      ? [
-          {
-            name: 'tauri-desktop',
-            use: { ...devices['Desktop Chrome'] },
-            testMatch: [/smoke\//, /adapters\/tauri\//, /tauri\/.*\.spec/],
-          },
-        ]
-      : []),
   ],
   // Serve a built bundle via `vite preview` rather than `vite dev`. Vite's
   // dev-mode dependency optimizer races under parallel Playwright workers
