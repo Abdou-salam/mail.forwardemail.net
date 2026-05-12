@@ -146,8 +146,12 @@
   const MAX_PAGINATION_PAGES = 10_000;
   const CALENDARS_PAGE_SIZE = 50;
   const CALENDAR_EVENTS_PAGE_SIZE = 500;
+  const getCalendarId = (cal: unknown) =>
+    (cal as Record<string, unknown>)?.id ||
+    (cal as Record<string, unknown>)?.calendar_id ||
+    (cal as Record<string, unknown>)?.uid ||
+    '';
   const isMobile = $derived(viewportWidth <= MOBILE_BREAKPOINT);
-
   // On mobile, show all calendars; on desktop, use the user's selection
   const effectiveSelectedCalendarIds = $derived(
     isMobile
@@ -175,11 +179,6 @@
     `calendar_events_${accountKey}_${calendarId}`;
   const getAllEventsCacheKey = (accountKey: string) => `calendar_events_${accountKey}_all`;
   const getCalendarPrefsKey = (accountKey: string) => `calendar_prefs_${accountKey}`;
-  const getCalendarId = (cal: unknown) =>
-    (cal as Record<string, unknown>)?.id ||
-    (cal as Record<string, unknown>)?.calendar_id ||
-    (cal as Record<string, unknown>)?.uid ||
-    '';
 
   const getCalendarsList = (response: unknown): unknown[] => {
     if (Array.isArray(response)) return response;
