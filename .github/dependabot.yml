@@ -12,8 +12,8 @@ updates:
     labels:
       - dependencies
     commit-message:
-      prefix: "deps"
-      prefix-development: "deps(dev)"
+      prefix: 'deps'
+      prefix-development: 'deps(dev)'
     groups:
       production-deps:
         patterns:
@@ -35,7 +35,7 @@ updates:
       - ci
       - dependencies
     commit-message:
-      prefix: "ci"
+      prefix: 'ci'
     groups:
       actions:
         patterns:
@@ -54,7 +54,7 @@ updates:
       - rust
       - dependencies
     commit-message:
-      prefix: "deps(rust)"
+      prefix: 'deps(rust)'
     groups:
       cargo-deps:
         patterns:
