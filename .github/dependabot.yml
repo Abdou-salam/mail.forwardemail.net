@@ -11,6 +11,9 @@ updates:
       - forwardemail/core
     labels:
       - dependencies
+    commit-message:
+      prefix: "deps"
+      prefix-development: "deps(dev)"
     groups:
       production-deps:
         patterns:
@@ -31,6 +34,12 @@ updates:
     labels:
       - ci
       - dependencies
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions:
+        patterns:
+          - '*'
 
   # Cargo (Tauri / Rust) dependencies
   - package-ecosystem: cargo
@@ -44,3 +53,12 @@ updates:
     labels:
       - rust
       - dependencies
+    commit-message:
+      prefix: "deps(rust)"
+    groups:
+      cargo-deps:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
