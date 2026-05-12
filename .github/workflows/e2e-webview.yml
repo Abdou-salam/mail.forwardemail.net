@@ -99,6 +99,7 @@ jobs:
       - name: Rust cache
         if: steps.gate.outputs.skip != 'true'
         uses: swatinem/rust-cache@v2
+        continue-on-error: true
         with:
           workspaces: src-tauri -> target
           shared-key: e2e-webview-${{ matrix.label }}
