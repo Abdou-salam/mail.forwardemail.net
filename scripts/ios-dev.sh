@@ -47,47 +47,69 @@ fi
 echo "🍎 iOS Dev Environment"
 echo "   Xcode:  $XCODE_PATH"
 
+# ── Helper: extract simulator name and UDID from simctl output ────────────
+# simctl format: "    iPhone 16e (B4A99C0E-FB18-4322-9960-8931763CC2ED) (Booted)"
+# We need the UDID for `simctl boot` but the NAME for `tauri ios dev`
+# because the Tauri CLI uses fuzzy name-matching, not UDID lookup.
+extract_sim_name() {
+  sed -E 's/^[[:space:]]*//' | sed -E 's/ \([0-9A-Fa-f-]{36}\).*//'
+}
+
+extract_sim_udid() {
+  sed -E 's/.*\(([0-9A-Fa-f-]{36})\).*/\1/'
+}
+
 # ── Boot a simulator if none booted ───────────────────────────────────────
-# Format: "    iPhone 15 Pro (UDID) (Booted)" — tolerate trailing whitespace
-BOOTED_UDID="$(xcrun simctl list devices | grep '(Booted)' | head -1 | sed -E 's/.*\(([0-9A-F-]{36})\).*/\1/')"
+BOOTED_LINE="$(xcrun simctl list devices | grep '(Booted)' | head -1 || true)"
+BOOTED_UDID=""
+BOOTED_NAME=""
+
+if [ -n "${BOOTED_LINE:-}" ]; then
+  BOOTED_UDID="$(echo "$BOOTED_LINE" | extract_sim_udid)"
+  BOOTED_NAME="$(echo "$BOOTED_LINE" | extract_sim_name)"
+fi
 
 if [ -z "${BOOTED_UDID:-}" ]; then
   # Pick the newest iPhone runtime available
-  DEVICE_UDID="$(xcrun simctl list devices available 2>/dev/null \
+  DEVICE_LINE="$(xcrun simctl list devices available 2>/dev/null \
     | grep -E 'iPhone 1[5-9]|iPhone 2[0-9]' \
-    | tail -1 \
-    | sed -E 's/.*\(([0-9A-F-]+)\).*/\1/' || true)"
+    | tail -1 || true)"
 
-  if [ -z "${DEVICE_UDID:-}" ]; then
-    DEVICE_UDID="$(xcrun simctl list devices available 2>/dev/null \
+  if [ -z "${DEVICE_LINE:-}" ]; then
+    DEVICE_LINE="$(xcrun simctl list devices available 2>/dev/null \
       | grep -E 'iPhone ' \
-      | tail -1 \
-      | sed -E 's/.*\(([0-9A-F-]+)\).*/\1/' || true)"
+      | tail -1 || true)"
+  fi
+
+  DEVICE_UDID=""
+  DEVICE_NAME=""
+  if [ -n "${DEVICE_LINE:-}" ]; then
+    DEVICE_UDID="$(echo "$DEVICE_LINE" | extract_sim_udid)"
+    DEVICE_NAME="$(echo "$DEVICE_LINE" | extract_sim_name)"
   fi
 
   if [ -n "${DEVICE_UDID:-}" ]; then
-    echo "   📲 Booting simulator $DEVICE_UDID..."
+    echo "   📲 Booting simulator $DEVICE_NAME ($DEVICE_UDID)..."
     xcrun simctl boot "$DEVICE_UDID" 2>/dev/null || true
     open -a Simulator
   else
     echo "   ⚠️  No iPhone simulator device found — open Simulator.app manually and retry"
   fi
 else
-  echo "   📲 Using booted simulator: $BOOTED_UDID"
+  echo "   📲 Using booted simulator: $BOOTED_NAME ($BOOTED_UDID)"
 fi
 
 # iOS Simulator shares host loopback, so no port-forwarding equivalent of
 # `adb reverse` is needed — Vite on localhost:5174 is reachable directly.
 
 # ── Launch ─────────────────────────────────────────────────────────────────
-# `tauri ios dev` takes DEVICE as a positional arg, auto-detecting a booted
-# simulator. We pass the booted UDID explicitly so it never ambiguously
-# picks a device destination.
+# `tauri ios dev` takes DEVICE as a positional arg — pass the simulator NAME
+# (not the UDID) because the Tauri CLI resolves it via fuzzy name-matching.
 DEVICE_ARG=""
-if [ -n "${BOOTED_UDID:-}" ]; then
-  DEVICE_ARG="$BOOTED_UDID"
-elif [ -n "${DEVICE_UDID:-}" ]; then
-  DEVICE_ARG="$DEVICE_UDID"
+if [ -n "${BOOTED_NAME:-}" ]; then
+  DEVICE_ARG="$BOOTED_NAME"
+elif [ -n "${DEVICE_NAME:-}" ]; then
+  DEVICE_ARG="$DEVICE_NAME"
 fi
 
 echo "   🚀 Starting tauri ios dev..."
