@@ -46,16 +46,14 @@
     return !document.body.classList.contains('light-mode');
   }
 
-  // Content signature determines when iframe is recreated
-  // Includes:
+  // Content signature determines when iframe is recreated. Content presence
+  // is deliberately NOT part of it: the iframe must survive the body-load
+  // clear->refill cycle so a cached revisit updates srcdoc in place instead
+  // of tearing down the iframe (which re-fetches every remote image).
   // - messageId: recreate for new messages
   // - themeVersion: recreate on theme change
-  // - hasContent: recreate when content arrives (0 -> N transition)
-  // Note: We use boolean hasContent, NOT content length, to avoid loops when content changes slightly
-  const hasContent = $derived(html && html.length > 0);
-  // Include plainText in the signature so toggling re-creates the iframe and
-  // re-measures height for the new rendering mode.
-  const contentSignature = $derived(`${messageId}:${themeVersion}:${hasContent}:${plainText}`);
+  // - plainText: recreate to re-measure height for the new rendering mode
+  const contentSignature = $derived(`${messageId}:${themeVersion}:${plainText}`);
 
   // Build srcdoc — reactively updates when html, dark mode, or plain-text
   // mode changes. The runtime script is loaded from /email-iframe.js (parent
