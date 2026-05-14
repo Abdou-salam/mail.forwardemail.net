@@ -117,6 +117,9 @@ jobs:
   # secrets needed. continue-on-error: false — fail the PR if anything is
   # found so it has to be remediated (rotated + history-rewritten) before
   # merge, not flagged-and-merged.
+  #
+  # Uses the gitleaks CLI directly instead of gitleaks-action, which requires
+  # a paid GITLEAKS_LICENSE for organization-owned repositories.
   secret-scan:
     if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
     runs-on: ubuntu-latest
@@ -130,10 +133,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Install gitleaks
+        run: |
+          GITLEAKS_VERSION="8.24.3"
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
       - name: Run gitleaks
-        uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2
-        env:
-          # GITLEAKS_LICENSE is optional for org/private repos; public repos
-          # work without it. The action no-ops if the license is invalid.
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gitleaks detect --source . --verbose --log-opts="${{ github.event.before || github.event.pull_request.base.sha }}..HEAD"
