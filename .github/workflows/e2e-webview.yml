@@ -97,6 +97,21 @@ jobs:
             webkit2gtk-driver \
             xvfb
 
+      - name: Ensure rustup is healthy (macOS)
+        if: steps.gate.outputs.skip != 'true' && runner.os == 'macOS'
+        shell: bash
+        run: |
+          # The macos-15 arm64 runner image can leave ~/.cargo/bin/cargo
+          # pointing at rustup-init instead of the rustup proxy, which breaks
+          # the `cargo metadata` call Tauri makes during the build.
+          if ! command -v cargo >/dev/null || cargo --version 2>&1 | grep -qi 'rustup-init'; then
+            echo "cargo is missing or points to rustup-init — reinstalling rustup"
+            rm -rf "$HOME/.cargo/bin"
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --no-modify-path --default-toolchain none
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
       - name: Install Rust toolchain
         if: steps.gate.outputs.skip != 'true'
         uses: dtolnay/rust-toolchain@stable
@@ -140,7 +155,7 @@ jobs:
           path: |
             ~/.cargo/bin/tauri-webdriver
             ~/.cargo/bin/tauri-webdriver.exe
-          key: ${{ runner.os }}-${{ runner.arch }}-tauri-webdriver-v0.1.1
+          key: ${{ runner.os }}-${{ runner.arch }}-tauri-webdriver-v0.1.2
 
       - name: Install tauri-webdriver intermediary
         if: steps.gate.outputs.skip != 'true' && steps.cache-twd.outputs.cache-hit != 'true'
