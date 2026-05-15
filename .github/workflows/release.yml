@@ -130,6 +130,11 @@ jobs:
   e2e-webview:
     needs: create-release
     uses: ./.github/workflows/e2e-webview.yml
+    with:
+      # Bypass the chore(release): skip guard inside e2e-webview.yml — without
+      # this, the called workflow inherits push + head_commit from release.yml's
+      # tag-push trigger and skips itself, stalling every downstream build job.
+      release_gate: true
     secrets: inherit
 
   # ── 2. Build Desktop (Tauri) ────────────────────────────────────────────
