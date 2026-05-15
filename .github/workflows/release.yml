@@ -140,6 +140,13 @@ jobs:
   # ── 2. Build Desktop (Tauri) ────────────────────────────────────────────
   build-desktop:
     needs: [create-release, e2e-webview]
+    # Explicit gate so a skipped/failed upstream surfaces in the run UI with
+    # a named cause (e.g. "needs.e2e-webview.result == 'success' was false")
+    # instead of an unexplained "skipped" — same effective behavior as the
+    # implicit default of `needs:`, but diagnosable at a glance.
+    if: ${{ !cancelled()
+      && needs.create-release.result == 'success'
+      && needs.e2e-webview.result == 'success' }}
     uses: ./.github/workflows/release-desktop.yml
     with:
       version: ${{ needs.create-release.outputs.version }}
@@ -153,6 +160,10 @@ jobs:
   # never blocks the release when provisioning isn't ready.
   build-mobile:
     needs: [create-release, e2e-webview]
+    # See build-desktop above — explicit for visibility in the run UI.
+    if: ${{ !cancelled()
+      && needs.create-release.result == 'success'
+      && needs.e2e-webview.result == 'success' }}
     uses: ./.github/workflows/release-mobile.yml
     with:
       version: ${{ needs.create-release.outputs.version }}
@@ -421,3 +432,81 @@ jobs:
             exit 0
           fi
           echo "Matrix notification sent (HTTP ${http_code})"
+
+  # ── 7. Release summary (always runs) ──────────────────────────────────
+  # Inspects every upstream job result and fails loudly on partial-success
+  # so a release that "looks done" but didn't actually produce artifacts
+  # can't silently land. Sibling of notify-matrix (neither blocks the other).
+  release-summary:
+    needs:
+      - create-release
+      - e2e-webview
+      - build-desktop
+      - build-mobile
+      - checksums
+      - publish
+      - deploy
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summarize and assert
+        env:
+          CREATE: ${{ needs.create-release.result }}
+          E2E: ${{ needs.e2e-webview.result }}
+          DESK: ${{ needs.build-desktop.result }}
+          MOBILE: ${{ needs.build-mobile.result }}
+          SUMS: ${{ needs.checksums.result }}
+          PUB: ${{ needs.publish.result }}
+          DEPLOY: ${{ needs.deploy.result }}
+          TAG: v${{ needs.create-release.outputs.version }}
+        run: |
+          {
+            echo "## Release \`$TAG\` summary"
+            echo
+            echo "| job | result |"
+            echo "| --- | --- |"
+            echo "| create-release | \`$CREATE\` |"
+            echo "| e2e-webview    | \`$E2E\` |"
+            echo "| build-desktop  | \`$DESK\` |"
+            echo "| build-mobile   | \`$MOBILE\` |"
+            echo "| checksums      | \`$SUMS\` |"
+            echo "| publish        | \`$PUB\` |"
+            echo "| deploy         | \`$DEPLOY\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          fail=0
+
+          # Hard-required: must be 'success'.
+          for pair in \
+              "create-release:$CREATE" \
+              "e2e-webview:$E2E" \
+              "build-desktop:$DESK" \
+              "publish:$PUB" \
+              "deploy:$DEPLOY"; do
+            name="${pair%%:*}"
+            result="${pair#*:}"
+            if [ "$result" != "success" ]; then
+              echo "::error::Required job '$name' did not succeed (result=$result)"
+              fail=1
+            fi
+          done
+
+          # build-mobile: 'success' or 'skipped' is acceptable. The mobile
+          # workflow soft-skips iOS when signing secrets aren't configured;
+          # the job itself still completes 'success' in that case. 'skipped'
+          # only happens if an upstream blocked it — which is what we want
+          # to tolerate (release ships without mobile if e2e blocked it).
+          if [ "$MOBILE" != "success" ] && [ "$MOBILE" != "skipped" ]; then
+            echo "::error::build-mobile result=$MOBILE (expected success or skipped)"
+            fail=1
+          fi
+
+          # checksums is best-effort — it only runs when build-desktop
+          # succeeded, and an empty artifact set is logged but non-fatal.
+
+          if [ $fail -ne 0 ]; then
+            echo "::error::Release $TAG completed with missing pieces — see annotations above."
+            exit 1
+          fi
+
+          echo "Release $TAG completed cleanly."
