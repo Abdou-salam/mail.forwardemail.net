@@ -110,20 +110,36 @@ jobs:
             webkit2gtk-driver \
             xvfb
 
-      - name: Ensure rustup is healthy (macOS)
+      - name: Bootstrap rustup (macOS, unconditional)
         if: steps.gate.outputs.skip != 'true' && runner.os == 'macOS'
         shell: bash
         run: |
+          set -u
           # The macos-15 arm64 runner image can leave ~/.cargo/bin/cargo
-          # pointing at rustup-init instead of the rustup proxy, which breaks
-          # the `cargo metadata` call Tauri makes during the build.
-          if ! command -v cargo >/dev/null || cargo --version 2>&1 | grep -qi 'rustup-init'; then
-            echo "cargo is missing or points to rustup-init — reinstalling rustup"
-            rm -rf "$HOME/.cargo/bin"
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-              | sh -s -- -y --no-modify-path --default-toolchain none
-          fi
+          # pointing at rustup-init (the installer) instead of the rustup
+          # proxy, which breaks the `cargo metadata` call Tauri makes during
+          # the build. Conditional repair was unreliable (detection misses,
+          # plus swatinem/rust-cache restoring a poisoned ~/.cargo/bin after
+          # the repair ran), so we now reinstall unconditionally on macOS
+          # and prevent rust-cache from caching ~/.cargo/bin below.
+          echo "=== pre-repair diagnostics ==="
+          echo "PATH=$PATH"
+          for tool in cargo rustc rustup rustup-init; do
+            p=$(command -v "$tool" 2>/dev/null || echo "<not on PATH>")
+            echo "$tool -> $p"
+            if [ -e "$p" ]; then
+              file "$p" 2>/dev/null || true
+            fi
+          done
+          echo "==============================="
+          rm -rf "$HOME/.cargo/bin" "$HOME/.rustup"
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --no-modify-path --default-toolchain none
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          echo "=== post-repair diagnostics ==="
+          ls -la "$HOME/.cargo/bin"
+          "$HOME/.cargo/bin/rustup" --version
+          echo "==============================="
 
       - name: Install Rust toolchain
         if: steps.gate.outputs.skip != 'true'
@@ -137,7 +153,13 @@ jobs:
         continue-on-error: true
         with:
           workspaces: src-tauri -> target
-          shared-key: e2e-webview-${{ matrix.label }}
+          # v2 bumps `shared-key` to invalidate any previously-saved cache
+          # whose ~/.cargo/bin contained a broken `cargo` (rustup-init) on
+          # macos-15 arm64. Pair with `cache-bin: false` so the bin dir
+          # never gets cached again — cargo-installed tooling we actually
+          # want to cache (tauri-webdriver) has its own actions/cache step.
+          shared-key: e2e-webview-v2-${{ matrix.label }}
+          cache-bin: false
 
       - name: Setup Node.js
         if: steps.gate.outputs.skip != 'true'
