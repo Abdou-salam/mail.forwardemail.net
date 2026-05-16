@@ -101,6 +101,124 @@
     </div>
 
     <script>
+      // Fatal-error diagnostic overlay.
+      // Registered before /src/main.ts so it sees module-init failures (e.g.
+      // a library mutating Object.prototype under freezePrototype, throwing
+      // "Attempted to assign to readonly property"). On error, renders a
+      // visible block with message + file + line + col + stack + UA so a
+      // production white-screen becomes diagnosable. Written in vanilla ES5
+      // so it never fails itself on older WebView features.
+      (function () {
+        var SHOWN = false;
+        function showFatal(detail) {
+          if (SHOWN) {
+            // Append subsequent errors so we capture cascades
+            var prev = document.getElementById('fe-fatal-error');
+            if (prev) {
+              prev.textContent += '\n\n' + detail;
+              return;
+            }
+          }
+          SHOWN = true;
+          var d = document.createElement('div');
+          d.id = 'fe-fatal-error';
+          d.style.cssText = [
+            'position:fixed',
+            'inset:0',
+            'z-index:2147483647',
+            'background:#1a1a1a',
+            'color:#f5f5f5',
+            'font:12px/1.45 ui-monospace,Menlo,Consolas,monospace',
+            'padding:16px 18px',
+            'overflow:auto',
+            'white-space:pre-wrap',
+            'word-break:break-word',
+          ].join(';');
+          d.textContent = detail;
+          (document.body || document.documentElement).appendChild(d);
+        }
+        function describe(label, err) {
+          var lines = [];
+          lines.push('Fatal: app failed to load (' + label + ')');
+          lines.push('');
+          lines.push('UA: ' + navigator.userAgent);
+          lines.push('URL: ' + location.href);
+          lines.push('Time: ' + new Date().toISOString());
+          lines.push('');
+          var name = (err && err.name) || 'Error';
+          var msg =
+            (err && (err.message || err.reason || (err.toString && err.toString()))) || String(err);
+          lines.push('Type: ' + name);
+          lines.push('Message: ' + msg);
+          if (err && err.fileName) lines.push('File: ' + err.fileName);
+          if (err && err.lineNumber != null) lines.push('Line: ' + err.lineNumber);
+          if (err && err.columnNumber != null) lines.push('Col: ' + err.columnNumber);
+          if (err && err.stack) {
+            lines.push('');
+            lines.push('Stack:');
+            lines.push(String(err.stack));
+          }
+          return lines.join('\n');
+        }
+        window.addEventListener(
+          'error',
+          function (event) {
+            // Resource-load errors (script/link 404) are handled by the
+            // chunk-recovery handler below — ignore them here.
+            var t = event.target;
+            if (t && t !== window && t.tagName) return;
+            var err = event.error;
+            if (!err) {
+              err = {
+                name: 'Error',
+                message: event.message || 'unknown error',
+                fileName: event.filename,
+                lineNumber: event.lineno,
+                columnNumber: event.colno,
+              };
+            }
+            try {
+              console.error('[fe-fatal]', err, event);
+            } catch (_) {}
+            showFatal(describe('error', err));
+          },
+          true,
+        );
+        window.addEventListener('unhandledrejection', function (event) {
+          var reason = event.reason || { message: 'unhandled rejection' };
+          // Skip chunk-load rejections — chunk-recovery handler handles them
+          var msg = (reason && reason.message) || '';
+          if (
+            /Failed to fetch dynamically imported module|Loading chunk|error loading dynamically imported module/i.test(
+              msg,
+            )
+          ) {
+            return;
+          }
+          try {
+            console.error('[fe-fatal][unhandledrejection]', reason);
+          } catch (_) {}
+          showFatal(describe('unhandledrejection', reason));
+        });
+        // Also surface CSP violations (these don't go through the 'error'
+        // event — they fire securitypolicyviolation). A blocked module
+        // can manifest indirectly as a readonly-assignment further down.
+        document.addEventListener('securitypolicyviolation', function (e) {
+          try {
+            console.error('[fe-fatal][csp]', e);
+          } catch (_) {}
+          var detail = [
+            'CSP violation',
+            'directive: ' + e.violatedDirective,
+            'effective: ' + e.effectiveDirective,
+            'blockedURI: ' + e.blockedURI,
+            'sourceFile: ' + e.sourceFile + ':' + e.lineNumber + ':' + e.columnNumber,
+            'sample: ' + (e.sample || ''),
+          ].join('\n');
+          showFatal(detail);
+        });
+      })();
+
       // Automatic chunk load error recovery.
       // When a deploy changes chunk hashes, the browser may have a cached
       // index.html that references old chunk filenames which now 404.
