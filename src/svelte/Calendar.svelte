@@ -2205,6 +2205,43 @@
     const ms = raw ? new Date(raw).getTime() : 0;
     return Number.isFinite(ms) ? ms : 0;
   };
+  const taskDueMs = (t: Record<string, unknown>) => {
+    const raw = (t.end || t.start) as string | undefined;
+    const ms = raw ? new Date(raw).getTime() : NaN;
+    return Number.isFinite(ms) ? ms : 0;
+  };
+
+  // Recurring VTODOs come in pre-expanded (one row per occurrence in the
+  // recurrence window) because the calendar grid wants every instance.
+  // The tasks list should show one entry per series, with its date set to
+  // the nearest-upcoming occurrence — or the most recent past one when
+  // every occurrence is already due. Non-recurring tasks pass through.
+  const collapseRecurringTasks = (tasks: Record<string, unknown>[]) => {
+    const now = Date.now();
+    const picked = new Map<string, Record<string, unknown>>();
+    const passthrough: Record<string, unknown>[] = [];
+    const pickBetter = (cur: Record<string, unknown>, cand: Record<string, unknown>) => {
+      const cMs = taskDueMs(cur);
+      const nMs = taskDueMs(cand);
+      const cUp = cMs >= now;
+      const nUp = nMs >= now;
+      if (nUp && !cUp) return cand;
+      if (cUp && !nUp) return cur;
+      // both upcoming → keep the earlier; both past → keep the later
+      if (cUp ? nMs < cMs : nMs > cMs) return cand;
+      return cur;
+    };
+    for (const t of tasks) {
+      const masterId = t.recurrenceMasterId as string | undefined;
+      if (!masterId) {
+        passthrough.push(t);
+        continue;
+      }
+      const cur = picked.get(masterId);
+      picked.set(masterId, cur ? pickBetter(cur, t) : t);
+    }
+    return [...passthrough, ...picked.values()];
+  };
 
   const tasksList = $derived.by(() => {
     const list = events.filter((ev) => {
@@ -2213,8 +2250,9 @@
       if ($hideCompletedTodos && isCompletedTask(task)) return false;
       return true;
     });
+    const collapsed = collapseRecurringTasks(list as Record<string, unknown>[]);
     const sortKey = $tasksSort;
-    return list.slice().sort((a, b) => {
+    return collapsed.slice().sort((a, b) => {
       const ar = a as Record<string, unknown>;
       const br = b as Record<string, unknown>;
       const aDone = isCompletedTask(ar) ? 1 : 0;
