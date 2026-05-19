@@ -1,6 +1,6 @@
 [package]
 name = "forwardemail-desktop"
-version = "0.10.16"
+version = "0.10.19"
 description = "Forward Email - Privacy-focused email client"
 authors = ["Forward Email <support@forwardemail.net>"]
 license = "BUSL-1.1"
@@ -29,7 +29,6 @@ tauri = { version = "2.10.3", features = [
   "devtools",
 ] }
 tauri-plugin-notification = "2.3.3"
-tauri-plugin-remote-push = "1.0.10"
 tauri-plugin-deep-link = "2.4.8"
 tauri-plugin-process = "2.3.1"
 tauri-plugin-opener = "2.5.3"
@@ -50,6 +49,15 @@ tauri-plugin-window-state = "2.4.1"
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-global-shortcut = "2.3.1"
 tauri-plugin-webdriver = { version = "0.2.1", optional = true }
+
+# Available on desktop + Android (handles UnifiedPush via the Android
+# bridge per lib.rs). Excluded from iOS only: tauri-plugin-remote-push
+# 1.0.10's published crate omits the `ios/` Xcode project, so the
+# Tauri build script's xcodebuild call fails with "directory does not
+# contain an Xcode project". iOS push needs to go through the native
+# APNs path until upstream ships a fix.
+[target.'cfg(not(target_os = "ios"))'.dependencies]
+tauri-plugin-remote-push = "1.0.10"
 
 # macOS-only: Objective-C bindings for dock badge + the custom NSOpenPanel
 # wrapper that works around the rfd 0.16 / objc2-app-kit 0.3.2 panic on
