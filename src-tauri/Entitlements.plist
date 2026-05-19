@@ -17,5 +17,8 @@
   <!-- Allow unsigned executable memory (required by WebKit JIT) -->
   <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
   <true/>
+  <!-- APNs Push Notifications (environment set dynamically by inject-ios-signing.cjs) -->
+  <key>aps-environment</key>
+  <string>development</string>
 </dict>
 </plist>

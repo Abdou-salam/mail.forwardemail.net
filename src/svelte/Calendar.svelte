@@ -135,7 +135,7 @@
   let allEvents = $state<unknown[]>([]);
   let eventsScope = $state('none');
   let eventsScopeCalendarId = $state('');
-  let calendarInstance = $state<ReturnType<typeof createCalendar> | null>(null);
+  let calendarInstance = $state.raw<ReturnType<typeof createCalendar> | null>(null);
   let hasMounted = $state(false);
   let calendarsLoaded = $state(false);
   let lastAccount = Local.get('email') || '';

@@ -25,6 +25,8 @@
     "notification:allow-create-channel",
     "notification:allow-register-action-types",
 
+    "remote-push:default",
+
     "deep-link:default",
 
     "process:allow-exit",

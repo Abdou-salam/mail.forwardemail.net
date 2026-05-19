@@ -150,3 +150,35 @@ if (fs.existsSync(infoPlistPath)) {
     console.log(`Synced Info.plist via regex fallback (versionCode=${buildNumber})`);
   }
 }
+
+// ── 4. Patch aps-environment based on build profile ─────────────────────────
+// The Entitlements.plist ships with aps-environment=development by default.
+// For App Store / ad-hoc / enterprise builds, switch to production so APNs
+// routes through the production gateway.
+//
+// Env vars:
+//   IOS_EXPORT_METHOD  - 'app-store' | 'ad-hoc' | 'enterprise' | 'release-testing'
+//   APNS_PRODUCTION    - 'true' to force production regardless of export method
+const entPlistPath = path.resolve(__dirname, '..', 'src-tauri', 'Entitlements.plist');
+if (fs.existsSync(entPlistPath)) {
+  let entPlist = fs.readFileSync(entPlistPath, 'utf8');
+  const exportMethod = (process.env.IOS_EXPORT_METHOD || '').toLowerCase();
+  const forceProduction = process.env.APNS_PRODUCTION === 'true';
+  const isProduction =
+    forceProduction ||
+    exportMethod === 'app-store' ||
+    exportMethod === 'ad-hoc' ||
+    exportMethod === 'enterprise';
+
+  const targetEnv = isProduction ? 'production' : 'development';
+  entPlist = entPlist.replace(
+    /<key>aps-environment<\/key>\s*<string>[^<]*<\/string>/,
+    `<key>aps-environment</key>\n  <string>${targetEnv}</string>`,
+  );
+  fs.writeFileSync(entPlistPath, entPlist);
+  console.log(
+    `Patched aps-environment to "${targetEnv}" (export=${exportMethod || 'dev'}, APNS_PRODUCTION=${forceProduction})`,
+  );
+} else {
+  console.warn('Entitlements.plist not found — skipping aps-environment patch');
+}

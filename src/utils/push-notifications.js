@@ -182,6 +182,7 @@ export async function initPushNotifications({ authToken } = {}) {
         const success = await registerPushToken(existingToken, platform, authToken);
         if (success) {
           initialized = true;
+          await setupForegroundPushListener();
           return true;
         }
       }
@@ -195,6 +196,7 @@ export async function initPushNotifications({ authToken } = {}) {
         storeToken(result.token, result.platform);
         initialized = true;
         await setupTokenRefreshListener();
+        await setupForegroundPushListener();
         return true;
       }
     }
@@ -207,6 +209,7 @@ export async function initPushNotifications({ authToken } = {}) {
       if (endpoint) {
         // Set up listener for incoming push messages
         await initUnifiedPushListener();
+        await setupForegroundPushListener();
         initialized = true;
         console.info('[push-notifications] UnifiedPush registered');
         return true;
@@ -216,6 +219,7 @@ export async function initPushNotifications({ authToken } = {}) {
     // Check if UnifiedPush was previously registered (survives app restart)
     if (isUnifiedPushRegistered()) {
       await initUnifiedPushListener();
+      await setupForegroundPushListener();
       initialized = true;
       return true;
     }
@@ -256,6 +260,40 @@ async function setupTokenRefreshListener() {
     tokenRefreshCleanup = unlisten;
   } catch {
     // Event API not available
+  }
+}
+
+/**
+ * Listen for push notifications received while the app is in the foreground.
+ * On iOS/Android, when a push arrives and the app is open, the OS delivers
+ * the payload silently (no banner).  We dispatch it as a DOM event so
+ * notification-manager can show a local notification + in-app toast.
+ */
+async function setupForegroundPushListener() {
+  try {
+    const { listen } = await import('@tauri-apps/api/event');
+
+    // tauri-plugin-notification emits this for foreground push delivery
+    await listen('notification-received', (event) => {
+      const payload = event?.payload;
+      if (!payload) return;
+      const data = payload.data || payload.extra || payload;
+      if (data && typeof data.event === 'string') {
+        window.dispatchEvent(new CustomEvent('fe:push-notification', { detail: data }));
+      }
+    });
+
+    // tauri-plugin-remote-push emits this when a remote push arrives
+    await listen('remote-push-notification', (event) => {
+      const payload = event?.payload;
+      if (!payload) return;
+      const data = payload.data || payload;
+      if (data && typeof data.event === 'string') {
+        window.dispatchEvent(new CustomEvent('fe:push-notification', { detail: data }));
+      }
+    });
+  } catch {
+    // Listeners not available on this platform — no-op
   }
 }
 

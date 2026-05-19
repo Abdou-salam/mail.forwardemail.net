@@ -124,16 +124,25 @@ const provider = new apn.Provider({
 
 async function sendPushNotification(deviceToken, { title, body, data }) {
   const notification = new apn.Notification();
+  notification.pushType = 'alert'; // REQUIRED for iOS 13+ (apns-push-type header)
   notification.alert = { title, body };
-  notification.topic = process.env.APNS_BUNDLE_ID;
+  notification.topic = process.env.APNS_BUNDLE_ID; // e.g. 'net.forwardemail.mail'
   notification.badge = data.unreadCount || 1;
   notification.sound = 'default';
+  notification.priority = 10; // Immediate delivery for visible alerts
   notification.payload = { type: 'new-message', ...data };
+  notification.expiry = Math.floor(Date.now() / 1000) + 86400; // 24h TTL
 
   const result = await provider.send(notification, deviceToken);
   return result;
 }
 ```
+
+> **Important:** The original `apn` package (v2.2.0) on npm does not support
+> the `pushType` header required by iOS 13+. Use
+> [`@parse/node-apn`](https://github.com/parse-community/node-apn) (maintained
+> fork) or [`apn2`](https://github.com/nicklockwood/apn2) which support the
+> HTTP/2 APNs protocol with all required headers.
 
 ## Android Setup (FCM)
 
@@ -281,10 +290,19 @@ await cleanupPushNotifications(userAuthToken);
 | `FCM_PROJECT_ID`           | Android  | Firebase project ID                        |
 | `FCM_SERVICE_ACCOUNT_PATH` | Android  | Path to service account JSON               |
 
-### Client-Side (`.env`)
+### Client-Side (Build Environment)
 
-No additional client-side environment variables are needed. The push token
-registration endpoint is hardcoded to the Forward Email API.
+| Variable               | Required | Description                                                                      |
+| ---------------------- | -------- | -------------------------------------------------------------------------------- |
+| `GOOGLE_SERVICES_JSON` | Android  | Path to `google-services.json` (default: `scripts/android/google-services.json`) |
+| `APPLE_TEAM_ID`        | iOS      | Apple Developer Team ID (for signing)                                            |
+| `IOS_EXPORT_METHOD`    | iOS      | `app-store`, `ad-hoc`, `enterprise`, or `release-testing`                        |
+| `APNS_PRODUCTION`      | iOS      | Set to `true` to force production APNs gateway                                   |
+| `IOS_SIGNING_IDENTITY` | iOS      | Code signing identity (default: `Apple Distribution`)                            |
+| `IOS_PROFILE_NAME`     | iOS      | Provisioning profile name                                                        |
+
+The push token registration endpoint (`/v1/push-tokens`) is hardcoded to the
+Forward Email API — no client-side URL configuration is needed.
 
 ## Testing
 

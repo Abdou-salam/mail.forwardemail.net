@@ -694,6 +694,49 @@ export function connectNotifications(wsClient) {
   }
   unsubs.push(wsClient.on(WS_EVENTS.NEW_RELEASE, handleNewRelease));
 
+  // ── Route push notifications through the same handlers as WebSocket ────
+  // APNs/FCM foreground pushes and UnifiedPush messages dispatch
+  // 'fe:push-notification' DOM events.  Handle them identically to WS
+  // events so the user always sees a notification regardless of delivery
+  // channel (push vs WebSocket).
+  const pushHandler = (event) => {
+    const payload = event?.detail;
+    if (!payload || typeof payload.event !== 'string') return;
+    switch (payload.event) {
+      case 'newMessage':
+        handleNewMessage(payload);
+        break;
+      case 'flagsUpdated':
+        handleFlagsUpdated(payload);
+        break;
+      case 'messagesExpunged':
+        handleMessagesExpunged(payload);
+        break;
+      case 'mailboxCreated':
+        handleMailboxCreated(payload);
+        break;
+      case 'mailboxDeleted':
+        handleMailboxDeleted(payload);
+        break;
+      case 'mailboxRenamed':
+        handleMailboxRenamed(payload);
+        break;
+      case 'calendarEventCreated':
+        handleCalendarEventCreated(payload);
+        break;
+      case 'calendarEventUpdated':
+        handleCalendarEventUpdated(payload);
+        break;
+      case 'contactCreated':
+        handleContactCreated(payload);
+        break;
+      default:
+        break;
+    }
+  };
+  window.addEventListener('fe:push-notification', pushHandler);
+  unsubs.push(() => window.removeEventListener('fe:push-notification', pushHandler));
+
   return () => {
     for (const unsub of unsubs) {
       if (typeof unsub === 'function') unsub();

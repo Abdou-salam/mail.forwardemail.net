@@ -31,4 +31,11 @@ echo "   SDK:  $ANDROID_HOME"
 echo "   NDK:  $ANDROID_NDK_HOME"
 echo ""
 
+# ── Inject generated-project patches ──────────────────────────────────────
+# These scripts modify src-tauri/gen/android/ after `tauri android init`
+# regenerates it.  They are idempotent and safe to re-run.
+node scripts/inject-android-fcm.cjs
+node scripts/inject-android-signing.cjs
+node scripts/inject-android-mainactivity.cjs
+
 exec npx tauri android build "$@"
