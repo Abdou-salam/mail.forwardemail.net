@@ -47,6 +47,10 @@
     "dialog:allow-open",
     "fs:allow-temp-write",
     {
+      "identifier": "fs:allow-read-file",
+      "allow": [{ "path": "**" }]
+    },
+    {
       "identifier": "opener:allow-open-path",
       "allow": [
         { "path": "$TEMP/forwardemail-original-*.html" },
