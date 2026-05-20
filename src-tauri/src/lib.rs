@@ -754,8 +754,18 @@ pub fn run() {
                 );
             }))
             .plugin(tauri_plugin_window_state::Builder::new().build())
-            .plugin(tauri_plugin_updater::Builder::new().build())
             .plugin(tauri_plugin_global_shortcut::Builder::new().build());
+
+        // The updater silently auto-installs (no onUpdateAvailable callback at
+        // the call site in main.ts) the moment GitHub Releases reports a newer
+        // version. In an e2e build the running binary is `--debug` and older
+        // than the latest published release, so the updater downloads the
+        // release binary and overwrites the on-disk debug binary mid-run —
+        // killing every subsequent spec file with "binary not found".
+        #[cfg(not(feature = "webdriver"))]
+        {
+            builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+        }
     }
 
     #[cfg(all(desktop, feature = "webdriver"))]
