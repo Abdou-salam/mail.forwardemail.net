@@ -1,7 +1,9 @@
-// Tauri 2 serves the embedded frontend over a custom scheme. Windows/WebView2
-// requires an https origin; macOS/Linux use a custom protocol scheme.
+// Tauri 2 serves the embedded frontend over a custom scheme. On Windows the
+// default is http://tauri.localhost (https only when app.windows.useHttpsScheme
+// is set in tauri.conf.json — we don't); macOS/Linux use tauri://localhost.
+// Hitting https://tauri.localhost on Windows yields ERR_CONNECTION_REFUSED.
 export function appUrl(): string {
-  return process.platform === 'win32' ? 'https://tauri.localhost' : 'tauri://localhost';
+  return process.platform === 'win32' ? 'http://tauri.localhost' : 'tauri://localhost';
 }
 
 export async function openApp(browser: WebdriverIO.Browser): Promise<void> {
