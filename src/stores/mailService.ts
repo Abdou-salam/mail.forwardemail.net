@@ -301,11 +301,11 @@ function triggerDownloadBytes(bytes: Uint8Array, filename: string, _contentType:
 }
 
 async function triggerDownloadBytesTauri(bytes: Uint8Array, filename: string): Promise<void> {
-  const { save } = await import('@tauri-apps/plugin-dialog');
   const { remove, writeFile } = await import('@tauri-apps/plugin-fs');
+  const { saveFileDialog } = await import('../utils/download');
 
   const safeFilename = sanitizeDownloadFilename(filename);
-  const outputPath = await save({
+  const outputPath = await saveFileDialog({
     defaultPath: safeFilename,
     filters: buildSaveDialogFilters(safeFilename),
   });
@@ -437,11 +437,11 @@ function dispatchMailServiceToast(message: string, type = 'error'): void {
 }
 
 async function triggerDownloadTauri(href: string, filename: string): Promise<void> {
-  const { save } = await import('@tauri-apps/plugin-dialog');
   const { remove, writeFile } = await import('@tauri-apps/plugin-fs');
+  const { saveFileDialog } = await import('../utils/download');
 
   const safeFilename = sanitizeDownloadFilename(filename);
-  const outputPath = await save({
+  const outputPath = await saveFileDialog({
     defaultPath: safeFilename,
     filters: buildSaveDialogFilters(safeFilename),
   });

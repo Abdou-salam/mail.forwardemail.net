@@ -6,6 +6,39 @@
  */
 
 import { isTauri } from './platform.js';
+import { isMacOSPlatform } from './file-picker';
+
+type SaveDialogOptions = {
+  defaultPath?: string;
+  filters?: Array<{ name: string; extensions: string[] }>;
+};
+
+/**
+ * Cross-platform save dialog with a macOS Tahoe workaround.
+ *
+ * On macOS we route through the `save_file_macos` Rust command because the
+ * bundled tauri-plugin-dialog uses rfd 0.16 → NSSavePanel::savePanel, which
+ * SIGABRTs when the OS returns nil (macOS 26 / Tahoe). On every other
+ * platform we keep using the plugin's save() — that path is unaffected and
+ * carries filter UX (extension dropdown) the wrapper cannot replicate.
+ *
+ * Returns the absolute path the user chose, or null on cancel.
+ */
+export async function saveFileDialog(opts: SaveDialogOptions = {}): Promise<string | null> {
+  if (isMacOSPlatform) {
+    const { invoke } = await import('@tauri-apps/api/core');
+    const path = await invoke<string | null>('save_file_macos', {
+      defaultFilename: opts.defaultPath ?? null,
+    });
+    return path || null;
+  }
+  const { save } = await import('@tauri-apps/plugin-dialog');
+  const path = await save({
+    defaultPath: opts.defaultPath,
+    filters: opts.filters,
+  });
+  return path || null;
+}
 
 /**
  * Download content as a file.
@@ -56,10 +89,9 @@ async function downloadFileTauri(
   // originating click handler can crash the webview process on macOS.
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-  const { save } = await import('@tauri-apps/plugin-dialog');
   const { writeFile } = await import('@tauri-apps/plugin-fs');
 
-  const filePath = await save({ defaultPath: filename });
+  const filePath = await saveFileDialog({ defaultPath: filename });
   if (!filePath) return;
 
   const data =

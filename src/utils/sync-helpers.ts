@@ -248,6 +248,10 @@ export function normalizeMessageForCache(
   const uid = (raw.Uid as number) || (raw.uid as number) || null;
   // Prefer server receive time (created_at) over sender's clock (header_date)
   // to ensure new messages sort to the top regardless of sender clock skew.
+  // Never fall back to Date.now() — a missing date field on the server
+  // payload must not silently stamp the message with the sync time
+  // (that produced bulk-sync results where every email appeared to have
+  // arrived at the moment of sync).
   const dateVal =
     (raw.created_at as string | number) ||
     (raw.date as string | number) ||
@@ -256,8 +260,7 @@ export function normalizeMessageForCache(
     (raw.header_date as string) ||
     (raw.received_at as string);
   const parsedDate = dateVal ? new Date(dateVal) : null;
-  const dateMs =
-    parsedDate && Number.isFinite(parsedDate.getTime()) ? parsedDate.getTime() : Date.now();
+  const dateMs = parsedDate && Number.isFinite(parsedDate.getTime()) ? parsedDate.getTime() : 0;
   const subject = decodeMimeHeader(
     (raw.Subject as string) || (raw.subject as string) || '(No subject)',
   );

@@ -125,6 +125,7 @@
     style="left: {adjustedX}px; top: {adjustedY}px;"
     role="menu"
     aria-label="Folder actions"
+    data-testid="folder-context-menu"
   >
     <button
       type="button"
@@ -152,6 +153,7 @@
       class="flex w-full items-center gap-2.5 px-3 py-2 text-sm outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
       onclick={() => handleAction(onMarkAsRead)}
       role="menuitem"
+      data-testid="folder-mark-all-as-read"
     >
       <CheckCheck class="h-4 w-4 text-muted-foreground" />
       <span>Mark all as read</span>

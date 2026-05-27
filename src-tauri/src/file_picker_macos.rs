@@ -1,18 +1,20 @@
-//! macOS file picker workaround.
+//! macOS file picker / save panel workaround.
 //!
 //! The `tauri-plugin-dialog` 2.7.x stack uses `rfd` 0.16.0, which calls
-//! `objc2_app_kit::NSOpenPanel::openPanel(mtm)`. That binding declares the
-//! return as non-nullable (`Retained<NSOpenPanel>`), so when macOS 26.3
-//! (Tahoe) returns nil — observed when the app's activation state isn't
-//! settled at call time — objc2's `retain_semantics::none_fail` panics and
-//! the process aborts. There is no released fix upstream yet.
+//! `objc2_app_kit::NSOpenPanel::openPanel(mtm)` and
+//! `objc2_app_kit::NSSavePanel::savePanel(mtm)`. Those bindings declare
+//! the return as non-nullable (`Retained<…>`), so when macOS 26.3 (Tahoe)
+//! returns nil — observed when the app's activation state isn't settled
+//! at call time — objc2's `retain_semantics::none_fail` panics and the
+//! process aborts. There is no released fix upstream yet.
 //!
-//! This module exposes a `pick_files_macos` Tauri command that constructs
-//! the panel via `msg_send!` with a nullable return type, falls back to
-//! `+alloc/-init` if `+openPanel` returns nil, activates the app first to
-//! satisfy the OS, and returns the chosen file paths as strings. The JS
-//! `pickFiles()` helper routes through this on macOS only; other platforms
-//! continue to use `tauri-plugin-dialog`.
+//! This module exposes Tauri commands `pick_files_macos` (NSOpenPanel)
+//! and `save_file_macos` (NSSavePanel) that construct the panels via
+//! `msg_send!` with nullable return types, fall back to `+alloc/-init`
+//! if the class method returns nil, activate the app first to satisfy
+//! the OS, and return the chosen paths as strings. The JS file-picker
+//! and download helpers route through these on macOS only; other
+//! platforms continue to use `tauri-plugin-dialog`.
 
 #![cfg(target_os = "macos")]
 
@@ -20,7 +22,8 @@ use objc2::msg_send;
 use objc2::rc::{Allocated, Retained};
 use objc2::ClassType;
 use objc2::MainThreadMarker;
-use objc2_app_kit::{NSApplication, NSModalResponseOK, NSOpenPanel};
+use objc2_app_kit::{NSApplication, NSModalResponseOK, NSOpenPanel, NSSavePanel};
+use objc2_foundation::NSString;
 
 /// Construct an `NSOpenPanel` safely.
 ///
@@ -86,4 +89,56 @@ pub fn pick_files_macos(multiple: bool) -> Result<Vec<String>, String> {
     }
 
     Ok(paths)
+}
+
+/// Construct an `NSSavePanel` safely.
+///
+/// Mirrors `create_open_panel` — uses a nullable-typed `msg_send!` for
+/// `+savePanel` to avoid the objc2 retain panic, falls back to
+/// `+alloc/-init` if the class method returns nil on Tahoe.
+fn create_save_panel(mtm: MainThreadMarker) -> Option<Retained<NSSavePanel>> {
+    unsafe {
+        let class = NSSavePanel::class();
+
+        let panel: Option<Retained<NSSavePanel>> = msg_send![class, savePanel];
+        if panel.is_some() {
+            return panel;
+        }
+
+        let alloc: Allocated<NSSavePanel> = mtm.alloc::<NSSavePanel>();
+        let panel: Option<Retained<NSSavePanel>> = msg_send![alloc, init];
+        panel
+    }
+}
+
+/// Show a native Save panel and return the chosen file path.
+///
+/// Returns Ok(Some(path)) when the user saves, Ok(None) when the user
+/// cancels, and Err when the panel could not be constructed.
+#[tauri::command]
+pub fn save_file_macos(default_filename: Option<String>) -> Result<Option<String>, String> {
+    let mtm = MainThreadMarker::new()
+        .ok_or_else(|| "save_file_macos must be invoked on the main thread".to_string())?;
+
+    let app = NSApplication::sharedApplication(mtm);
+    app.activate();
+
+    let panel = create_save_panel(mtm)
+        .ok_or_else(|| "Could not construct NSSavePanel (macOS returned nil)".to_string())?;
+
+    if let Some(name) = default_filename {
+        if !name.is_empty() {
+            let ns_name = NSString::from_str(&name);
+            panel.setNameFieldStringValue(&ns_name);
+        }
+    }
+
+    let response = panel.runModal();
+    if response != NSModalResponseOK {
+        return Ok(None);
+    }
+
+    let url = panel.URL();
+    let path = url.and_then(|u| u.path()).map(|s| s.to_string());
+    Ok(path)
 }

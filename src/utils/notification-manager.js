@@ -420,7 +420,36 @@ const SILENT_FOLDERS = new Set([
   'SENT MAIL',
   'SENT MESSAGES',
   'SENT ITEMS',
+  'ARCHIVE',
+  'ARCHIVES',
+  'ALL MAIL',
+  'JUNK',
+  'JUNK EMAIL',
+  'SPAM',
+  'TRASH',
+  'BIN',
+  'DELETED ITEMS',
+  'DELETED MESSAGES',
 ]);
+
+const SILENT_SPECIAL_USE = new Set([
+  '\\Sent',
+  '\\Drafts',
+  '\\Archive',
+  '\\Junk',
+  '\\Trash',
+  '\\All',
+]);
+
+// IMAP servers can deliver messages already marked \Seen when another client
+// APPENDed/COPYed them (e.g. Thunderbird migrating mail). A genuine new
+// delivery is never pre-read, so this catches cross-folder copies of already
+// read mail across all folders — including Inbox.
+const hasSeenFlag = (msg) => {
+  const flags = msg?.flags;
+  if (!Array.isArray(flags)) return false;
+  return flags.some((f) => typeof f === 'string' && f.toLowerCase() === '\\seen');
+};
 
 /**
  * Resolve the mailbox identifier from a newMessage WS payload to the matching
@@ -446,6 +475,66 @@ async function resolveMailbox(identifier) {
   return { path: identifier, specialUse: null };
 }
 
+/**
+ * Insert a freshly delivered message into the in-memory mailboxStore when the
+ * user is currently viewing the destination folder. The shape mirrors what
+ * `normalizeMessage` in sync-helpers.ts produces so the row renders correctly
+ * before the next loadMessages() reconciles with the server.
+ *
+ * No-op when the affected folder isn't the active one — refreshFolder() in
+ * websocket-updater handles cache invalidation for the non-active case.
+ */
+async function prependNewMessageToStore({ msg, mailbox, from, subject, uid }) {
+  if (!uid && !msg?.id) return;
+  try {
+    const { get } = await import('svelte/store');
+    const { mailboxStore } = await import('../stores/mailboxStore');
+    const currentFolder = get(mailboxStore.state.selectedFolder);
+    if (!currentFolder || !mailbox) return;
+    if (currentFolder.toUpperCase() !== String(mailbox).toUpperCase()) return;
+
+    const id = String(msg?.id ?? msg?.Uid ?? msg?.uid ?? uid);
+    const messages = get(mailboxStore.state.messages) || [];
+    if (messages.some((m) => String(m.id) === id)) return;
+
+    const flags = Array.isArray(msg?.flags) ? msg.flags : [];
+    const dateRaw =
+      msg?.created_at ||
+      msg?.Date ||
+      msg?.date ||
+      msg?.internal_date ||
+      msg?.header_date ||
+      msg?.received_at ||
+      null;
+    const parsedDate = dateRaw ? new Date(dateRaw) : null;
+    const dateMs =
+      parsedDate && Number.isFinite(parsedDate.getTime()) ? parsedDate.getTime() : Date.now();
+
+    const envelope = {
+      id,
+      uid: msg?.uid ?? msg?.Uid ?? null,
+      account: Local.get('email') || 'default',
+      folder: currentFolder,
+      date: dateMs,
+      dateMs,
+      from: from || 'Unknown',
+      subject: subject || '(No subject)',
+      normalizedSubject: subject || '',
+      snippet: msg?.snippet || msg?.preview || '',
+      flags,
+      is_unread: !flags.some((f) => typeof f === 'string' && f.toLowerCase() === '\\seen'),
+      is_starred: flags.some((f) => typeof f === 'string' && f.toLowerCase() === '\\flagged'),
+      has_attachment: Boolean(msg?.has_attachment || msg?.hasAttachments),
+      message_id: msg?.message_id || msg?.MessageId || msg?.['Message-ID'] || null,
+      updatedAt: Date.now(),
+      __optimistic: true,
+    };
+    mailboxStore.state.messages.set([envelope, ...messages]);
+  } catch {
+    // Store not ready or shape change — silently fall back to refreshFolder()
+  }
+}
+
 async function handleNewMessage(data) {
   if (!data || typeof data !== 'object') return;
 
@@ -456,16 +545,20 @@ async function handleNewMessage(data) {
   const rawMailbox = data.mailbox || msg.mailbox || 'INBOX';
   const { path: mailbox, specialUse } = await resolveMailbox(rawMailbox);
 
-  // Skip notifications for self-originated messages (sent copies, drafts,
-  // replies that the server echoes back). Four signals from strongest to
-  // weakest, because server payloads and folder metadata are inconsistent
-  // across providers / cold-start timing:
-  //   1. IMAP specialUse flag on the folder (server-authoritative).
-  //   2. Path equality against the account's configured Sent/Drafts folder.
-  //   3. Uppercase path match against the SILENT_FOLDERS name list.
-  //   4. From-address equal to the active account email (catches Cc-to-self
+  // Suppress notifications for messages that aren't a fresh user-facing
+  // delivery. Five signals from strongest to weakest, because server payloads
+  // and folder metadata are inconsistent across providers / cold-start timing:
+  //   1. Pre-\Seen flag on the arriving message — a real new delivery is
+  //      never already read, so this signals an IMAP COPY/APPEND from
+  //      another client (e.g. Thunderbird migrating old mail).
+  //   2. IMAP specialUse flag on the folder (server-authoritative): Sent,
+  //      Drafts, Archive, Junk, Trash, All.
+  //   3. Path equality against the account's configured Sent/Drafts folder.
+  //   4. Uppercase path match against the SILENT_FOLDERS name list.
+  //   5. From-address equal to the active account email (catches Cc-to-self
   //      and any case where folder classification failed).
-  if (specialUse === '\\Sent' || specialUse === '\\Drafts') return;
+  if (hasSeenFlag(msg)) return;
+  if (specialUse && SILENT_SPECIAL_USE.has(specialUse)) return;
 
   try {
     const { mailboxStore } = await import('../stores/mailboxStore');
@@ -521,6 +614,16 @@ async function handleNewMessage(data) {
   const displayName = sanitizePlain(extractDisplayName(from) || 'Unknown sender', MAX_TITLE_LEN);
   const safeSubject = sanitizePlain(subject || '(No subject)', MAX_BODY_LEN);
   const safeTag = sanitize(`new-message-${uid || Date.now()}`, MAX_TAG_LEN);
+
+  // Optimistically inject the envelope into the message list if the user is
+  // currently viewing the affected folder. Without this, the WS broadcast
+  // arrives before the backend indexer makes the message queryable, so the
+  // subsequent refreshFolder()→loadMessages() returns the old list and the
+  // user only sees the new mail after folder-switch (10-30s later).
+  prependNewMessageToStore({ msg, mailbox, from, subject, uid }).catch(() => {
+    // Failure here only affects the in-place refresh — refreshFolder() runs
+    // separately in websocket-updater and will eventually catch up.
+  });
 
   showNotification({
     title: `New email from ${displayName}`,

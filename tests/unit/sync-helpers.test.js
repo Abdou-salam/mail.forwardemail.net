@@ -178,3 +178,63 @@ describe('extractFromField fallbacks', () => {
     expect(extractFromField(raw)).toBe('bounce@example.com');
   });
 });
+
+// Regression guard for the "sync stamped every email with this morning's
+// time" bug. normalizeMessageForCache used to fall back to Date.now() when
+// the server payload had no date field, which made bulk-sync passes look
+// like every message arrived at the moment of sync. dateMs must be 0
+// (sentinel for "unknown") in that case, and created_at must beat the
+// sender's clock when both are present.
+describe('normalizeMessageForCache date handling', () => {
+  it('returns dateMs = 0 when no date fields are present (no Date.now() fallback)', () => {
+    const before = Date.now();
+    const raw = {
+      Uid: 1,
+      Subject: 'No date field',
+      From: { Email: 's@example.com' },
+    };
+    const normalized = normalizeMessageForCache(raw, 'INBOX', 'acct');
+    const after = Date.now();
+    // Crucial: dateMs must NOT have been stamped with "now".
+    expect(normalized.dateMs).toBe(0);
+    expect(normalized.dateMs).toBeLessThan(before);
+    expect(normalized.dateMs).toBeLessThan(after);
+  });
+
+  it('prefers server created_at over header date', () => {
+    const created = new Date('2025-06-01T12:00:00Z').getTime();
+    const header = new Date('2025-06-01T13:30:00Z').getTime();
+    const raw = {
+      Uid: 2,
+      Subject: 'Created_at wins',
+      From: { Email: 's@example.com' },
+      created_at: new Date(created).toISOString(),
+      header_date: new Date(header).toISOString(),
+    };
+    const normalized = normalizeMessageForCache(raw, 'INBOX', 'acct');
+    expect(normalized.dateMs).toBe(created);
+  });
+
+  it('uses date field when created_at is absent', () => {
+    const ts = new Date('2024-11-15T08:00:00Z').getTime();
+    const raw = {
+      Uid: 3,
+      Subject: 'Date only',
+      From: { Email: 's@example.com' },
+      date: new Date(ts).toISOString(),
+    };
+    const normalized = normalizeMessageForCache(raw, 'INBOX', 'acct');
+    expect(normalized.dateMs).toBe(ts);
+  });
+
+  it('returns dateMs = 0 when date is unparseable', () => {
+    const raw = {
+      Uid: 4,
+      Subject: 'Bad date',
+      From: { Email: 's@example.com' },
+      date: 'not-a-real-date',
+    };
+    const normalized = normalizeMessageForCache(raw, 'INBOX', 'acct');
+    expect(normalized.dateMs).toBe(0);
+  });
+});

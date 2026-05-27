@@ -5005,12 +5005,12 @@
       });
     }
 
-    // Set up infinite scroll observer for mobile
+    // Set up infinite scroll observer (mobile + desktop).
     if (typeof window !== 'undefined' && 'IntersectionObserver' in window) {
       infiniteScrollObserver = new IntersectionObserver(
         (entries) => {
           entries.forEach((entry) => {
-            if (entry.isIntersecting && isMobileViewport() && $hasNextPage && !$loading) {
+            if (entry.isIntersecting && $hasNextPage && !$loading) {
               nextPage();
             }
           });
@@ -5051,6 +5051,15 @@
           threadMessageBodies.set(new Map());
           loadProfileName(acct);
           loadProfileImage(acct);
+          // Defensive: ensure the detail pane doesn't keep showing the
+          // previous account's message body while the new account's
+          // first-message body is fetched. performAccountSwitch clears
+          // these store values too, but a stale body has been observed
+          // when the body-loader subscription doesn't refire before the
+          // new selectedMessage is set.
+          mailboxStore?.state?.selectedMessage?.set?.(null);
+          mailboxStore?.state?.messageBody?.set?.('');
+          mailboxStore?.state?.attachments?.set?.([]);
         }
       }),
     );
@@ -7172,27 +7181,6 @@
                 </div>
               {/if}
             </div>
-
-            {#if !outboxSelected && !isMobile}
-              <div
-                class="fe-pagination flex items-center justify-center gap-2 px-3 py-1.5 border-t border-border text-xs text-muted-foreground"
-              >
-                <button
-                  class="px-2 py-1 hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
-                  type="button"
-                  onclick={prevPage}
-                  disabled={$page <= 1}>Prev</button
-                >
-                <span>Page {$page}</span>
-                {#if $hasNextPage}
-                  <button
-                    class="px-2 py-1 hover:bg-accent hover:text-accent-foreground"
-                    type="button"
-                    onclick={nextPage}>Next</button
-                  >
-                {/if}
-              </div>
-            {/if}
           </section>
 
           {#if contextMenuVisible && contextMenuMessage}

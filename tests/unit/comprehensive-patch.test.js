@@ -1079,7 +1079,11 @@ describe('Large mailbox bootstrap timeout regressions', () => {
     );
     expect(mailServiceSrc).toContain('sanitizeDownloadFilename');
     expect(mailServiceSrc).toContain('buildSaveDialogFilters');
-    expect(mailServiceSrc).toContain("const { save } = await import('@tauri-apps/plugin-dialog')");
+    // Save dialog routes through saveFileDialog (utils/download), which
+    // applies the macOS Tahoe NSSavePanel nil-return workaround.
+    expect(mailServiceSrc).toContain(
+      "const { saveFileDialog } = await import('../utils/download')",
+    );
     expect(mailServiceSrc).toContain('const bytes = await readDownloadBytes(href)');
     expect(mailServiceSrc).toContain("new CustomEvent('fe:mail-service-toast'");
     expect(mailServiceSrc).toContain('defaultPath: safeFilename');
@@ -1212,5 +1216,160 @@ describe('PGP desktop and settings regressions', () => {
     expect(syncWorkerSrc).toContain('function isRetryablePgpUnlockError');
     expect(syncWorkerSrc).toContain('invalidKey: true');
     expect(syncWorkerSrc).toContain('needsPassphrase: retryable');
+  });
+});
+
+// ============================================================
+// 11. Pre-release regression guards (May 2026 round)
+// ============================================================
+describe('pre-release regression guards', () => {
+  const notificationMgrSrc = fs.readFileSync(
+    path.resolve(__dirname, '../../src/utils/notification-manager.js'),
+    'utf8',
+  );
+  const swSyncSrc = fs.readFileSync(path.resolve(__dirname, '../../public/sw-sync.js'), 'utf8');
+  const syncHelpersSrc = fs.readFileSync(
+    path.resolve(__dirname, '../../src/utils/sync-helpers.ts'),
+    'utf8',
+  );
+  const settingsRegistrySrc = fs.readFileSync(
+    path.resolve(__dirname, '../../src/stores/settingsRegistry.ts'),
+    'utf8',
+  );
+  const inviteCardSrc = fs.readFileSync(
+    path.resolve(__dirname, '../../src/svelte/components/CalendarInviteCard.svelte'),
+    'utf8',
+  );
+  const mailboxStorePrSrc = fs.readFileSync(
+    path.resolve(__dirname, '../../src/stores/mailboxStore.ts'),
+    'utf8',
+  );
+  const mailboxSveltePrSrc = fs.readFileSync(
+    path.resolve(__dirname, '../../src/svelte/Mailbox.svelte'),
+    'utf8',
+  );
+  const filePickerRustSrc = fs.readFileSync(
+    path.resolve(__dirname, '../../src-tauri/src/file_picker_macos.rs'),
+    'utf8',
+  );
+  const downloadSrc = fs.readFileSync(
+    path.resolve(__dirname, '../../src/utils/download.ts'),
+    'utf8',
+  );
+  const filePickerJsSrc = fs.readFileSync(
+    path.resolve(__dirname, '../../src/utils/file-picker.ts'),
+    'utf8',
+  );
+
+  it('notification filter covers \\Seen + Archive/Junk/Trash specialUse and name list', () => {
+    expect(notificationMgrSrc).toContain('SILENT_SPECIAL_USE');
+    expect(notificationMgrSrc).toContain("'\\\\Archive'");
+    expect(notificationMgrSrc).toContain("'\\\\Junk'");
+    expect(notificationMgrSrc).toContain("'\\\\Trash'");
+    expect(notificationMgrSrc).toContain("'\\\\All'");
+    expect(notificationMgrSrc).toContain("'ARCHIVE'");
+    expect(notificationMgrSrc).toContain("'JUNK'");
+    expect(notificationMgrSrc).toContain("'TRASH'");
+    // hasSeenFlag is the gate that catches Thunderbird IMAP COPY/APPEND.
+    expect(notificationMgrSrc).toMatch(/const hasSeenFlag\s*=/);
+    expect(notificationMgrSrc).toContain('if (hasSeenFlag(msg)) return;');
+  });
+
+  it('handleNewMessage optimistically prepends to the message store', () => {
+    expect(notificationMgrSrc).toContain('prependNewMessageToStore');
+    expect(notificationMgrSrc).toContain('mailboxStore.state.messages.set([envelope');
+    expect(notificationMgrSrc).toContain('__optimistic: true');
+  });
+
+  it('sw-sync normalizeMessage never falls back to Date.now() for the message date', () => {
+    // The literal "Date.now()" fallback that caused the bulk-sync date bug
+    // must be gone — the line now resolves to 0 when no date field is usable.
+    expect(swSyncSrc).not.toMatch(/new Date\(rawDate \|\| Date\.now\(\)\)/);
+    expect(swSyncSrc).toContain('raw.created_at ||');
+    expect(swSyncSrc).toMatch(/parsedDate\.getTime\(\)\s*:\s*0/);
+  });
+
+  it('sync-helpers normalizeMessageForCache never falls back to Date.now() for the message date', () => {
+    expect(syncHelpersSrc).not.toMatch(/parsedDate\.getTime\(\)\s*:\s*Date\.now\(\)/);
+    expect(syncHelpersSrc).toMatch(/parsedDate\.getTime\(\)\s*:\s*0/);
+  });
+
+  it('default_calendar_id setting is registered as an account-scoped device key', () => {
+    expect(settingsRegistrySrc).toContain('default_calendar_id:');
+    expect(settingsRegistrySrc).toMatch(/default_calendar_id_\$\{account\}/);
+    expect(settingsRegistrySrc).toMatch(/id:\s*'default_calendar_id'/);
+  });
+
+  it('CalendarInviteCard prefers the saved default before "Calendar"/list[0]', () => {
+    // The picker must read the saved id first and only fall back to the
+    // label-match → list[0] heuristic, otherwise invites can land on a
+    // "random" calendar when no calendar is literally named "Calendar".
+    expect(inviteCardSrc).toContain('Local.get(defaultCalendarKey())');
+    expect(inviteCardSrc).toContain('Local.set(defaultCalendarKey(), calendarId)');
+    expect(inviteCardSrc).toMatch(/<select[\s\S]*bind:value=\{selectedCalendarId\}/);
+  });
+
+  it('markFolderAsRead no longer hits .modify((m) => …) — db worker rejects that', () => {
+    // The bug surfaced as "db worker modify does not support function
+    // callbacks; pass an object". Switching to bulkPut preserves \Flagged
+    // while clearing the function-callback path entirely.
+    expect(mailboxStorePrSrc).toContain('await db.messages.bulkPut(updated)');
+    // Defence-in-depth: assert there's no `.modify(` with an arrow-fn body
+    // sitting inside the markFolderAsRead helper specifically.
+    const markStart = mailboxStorePrSrc.indexOf('const markFolderAsRead');
+    expect(markStart).toBeGreaterThan(-1);
+    const markEnd = mailboxStorePrSrc.indexOf('const getSpamFolderPath', markStart);
+    // Strip // line comments so the assertion catches real code only, not the
+    // explanatory comment that describes the previous buggy form.
+    const markBody = mailboxStorePrSrc
+      .slice(markStart, markEnd)
+      .split('\n')
+      .map((line) => line.replace(/\/\/.*$/, ''))
+      .join('\n');
+    expect(markBody).not.toMatch(/\.modify\(\s*\(m\)\s*=>/);
+  });
+
+  it('Mailbox.svelte removed the "Page N" desktop pagination and enabled desktop infinite scroll', () => {
+    expect(mailboxSveltePrSrc).not.toContain('<span>Page {$page}</span>');
+    expect(mailboxSveltePrSrc).not.toContain('class="fe-pagination');
+    // Infinite-scroll observer no longer gates on isMobileViewport().
+    expect(mailboxSveltePrSrc).toMatch(
+      /infiniteScrollObserver\s*=\s*new IntersectionObserver[\s\S]{0,400}entry\.isIntersecting && \$hasNextPage/,
+    );
+  });
+
+  it('account switch clears the viewed-email state in the currentAccount subscriber', () => {
+    // Belt-and-suspenders clear inside the Mailbox component, on top of
+    // performAccountSwitch's own clears. Pin both lines so a future "DRY
+    // it up" refactor doesn't silently bring back the stale-body bug.
+    expect(mailboxSveltePrSrc).toContain('mailboxStore?.state?.selectedMessage?.set?.(null);');
+    expect(mailboxSveltePrSrc).toContain("mailboxStore?.state?.messageBody?.set?.('');");
+    expect(mailboxSveltePrSrc).toContain('mailboxStore?.state?.attachments?.set?.([]);');
+  });
+
+  it('save_file_macos Rust command exists and uses nullable NSSavePanel construction', () => {
+    expect(filePickerRustSrc).toContain('pub fn save_file_macos');
+    expect(filePickerRustSrc).toContain('create_save_panel');
+    // Nullable msg_send! is the key Tahoe-safety pattern.
+    expect(filePickerRustSrc).toMatch(
+      /let panel:\s*Option<Retained<NSSavePanel>>\s*=\s*msg_send!\[class,\s*savePanel\]/,
+    );
+    // alloc/init fallback path mirrors the open-panel wrapper.
+    expect(filePickerRustSrc).toMatch(/mtm\.alloc::<NSSavePanel>\(\)/);
+  });
+
+  it('JS saveFileDialog routes through save_file_macos on macOS', () => {
+    expect(downloadSrc).toContain('export async function saveFileDialog');
+    expect(downloadSrc).toContain('isMacOSPlatform');
+    expect(downloadSrc).toContain("invoke<string | null>('save_file_macos'");
+  });
+
+  it('file-picker no longer falls back to plugin-dialog open() on macOS (would SIGABRT)', () => {
+    // The literal fallback import that previously triggered the open-panel
+    // crash on Tahoe must be gone from the macOS branch.
+    const macBranchStart = filePickerJsSrc.indexOf('if (isMacOS)');
+    const macBranchEnd = filePickerJsSrc.indexOf('} else {', macBranchStart);
+    const macBranch = filePickerJsSrc.slice(macBranchStart, macBranchEnd);
+    expect(macBranch).not.toContain('@tauri-apps/plugin-dialog');
   });
 });

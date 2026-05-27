@@ -20,6 +20,8 @@ import { isTauriDesktop } from './platform.js';
 const isMacOS =
   typeof navigator !== 'undefined' && /Mac|iPhone|iPad/i.test(navigator.platform || '');
 
+export const isMacOSPlatform = isMacOS;
+
 /**
  * Pick files using Tauri's native dialog on desktop.
  * Returns File[] on success, null if cancelled or not on Tauri desktop.
@@ -37,18 +39,14 @@ export async function pickFiles({
 
   let paths: string[];
   if (isMacOS) {
+    // No plugin-dialog fallback here: on Tahoe the plugin's open() goes
+    // through rfd 0.16 → NSOpenPanel::openPanel which can SIGABRT. If our
+    // wrapper genuinely cannot construct the panel, surface the failure
+    // so the user can retry; do not let the plugin call run.
     const { invoke } = await import('@tauri-apps/api/core');
-    try {
-      const result = await invoke<string[]>('pick_files_macos', { multiple });
-      if (!result || result.length === 0) return null;
-      paths = result;
-    } catch (err) {
-      console.warn('[file-picker] pick_files_macos failed, falling back to plugin:', err);
-      const { open } = await import('@tauri-apps/plugin-dialog');
-      const selected = await open({ multiple, filters: buildFilters(accept) });
-      if (!selected) return null;
-      paths = Array.isArray(selected) ? selected : [selected];
-    }
+    const result = await invoke<string[]>('pick_files_macos', { multiple });
+    if (!result || result.length === 0) return null;
+    paths = result;
   } else {
     const { open } = await import('@tauri-apps/plugin-dialog');
     const selected = await open({ multiple, filters: buildFilters(accept) });

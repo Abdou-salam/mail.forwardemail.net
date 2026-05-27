@@ -845,6 +845,8 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             file_picker_macos::pick_files_macos,
             #[cfg(target_os = "macos")]
+            file_picker_macos::save_file_macos,
+            #[cfg(target_os = "macos")]
             self_heal_macos::self_heal_flush_launch_services,
             #[cfg(target_os = "macos")]
             self_heal_macos::self_heal_detect_stale_bundles,

@@ -2286,16 +2286,24 @@ const createMailboxStore = () => {
 
       // Update IndexedDB optimistically (and stamp \Seen into the flags
       // array so subsequent sync passes don't flip the bit back).
-      await db.messages
-        .where('[account+folder]')
-        .equals([account, folderPath])
-        .modify((m) => {
-          m.is_unread = false;
-          m.is_unread_index = 0;
-          const flags = Array.isArray(m.flags) ? m.flags : [];
-          if (!flags.includes('\\Seen')) flags.push('\\Seen');
-          m.flags = flags;
-        });
+      //
+      // Using bulkPut instead of .modify((m) => …): the db worker rejects
+      // function callbacks ("db worker modify does not support function
+      // callbacks; pass an object") because callbacks can't be serialised
+      // across the worker boundary. Read-then-bulkPut preserves existing
+      // per-message flags (e.g. \Flagged) which a flat object-style modify
+      // would erase.
+      const updated = allFolderMessages.map((m) => {
+        const flags = Array.isArray(m.flags) ? m.flags : [];
+        const nextFlags = flags.includes('\\Seen') ? flags : [...flags, '\\Seen'];
+        return {
+          ...m,
+          is_unread: false,
+          is_unread_index: 0,
+          flags: nextFlags,
+        };
+      });
+      await db.messages.bulkPut(updated);
 
       // Reload current folder if it matches
       if (get(selectedFolder) === folderPath) {

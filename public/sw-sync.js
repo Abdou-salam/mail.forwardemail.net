@@ -273,10 +273,25 @@
   const isCancelled = (folderKey) => state.get(folderKey)?.cancelled;
 
   const normalizeMessage = (raw, account, folder) => {
+    // Prefer server-assigned receive time over sender's clock, and never
+    // silently stamp messages with Date.now() — that produced the bug where
+    // a full sync made every email appear to have arrived at sync time.
     const rawDate =
-      raw.Date || raw.date || raw.header_date || raw.internal_date || raw.received_at || raw.Date;
-    const parsedDate = new Date(rawDate || Date.now());
-    const dateMs = Number.isFinite(parsedDate.getTime()) ? parsedDate.getTime() : Date.now();
+      raw.created_at ||
+      raw.Date ||
+      raw.date ||
+      raw.internal_date ||
+      raw.header_date ||
+      raw.received_at ||
+      null;
+    const parsedDate = rawDate ? new Date(rawDate) : null;
+    const dateMs = parsedDate && Number.isFinite(parsedDate.getTime()) ? parsedDate.getTime() : 0;
+    if (!dateMs && LOG) {
+      console.warn('[SW sync] message has no usable date field', {
+        id: raw.Uid || raw.id || raw.uid,
+        keys: Object.keys(raw || {}),
+      });
+    }
     const subject = raw.Subject || raw.subject || '(No subject)';
     const flags = Array.isArray(raw.flags) ? raw.flags : [];
     const messageId =

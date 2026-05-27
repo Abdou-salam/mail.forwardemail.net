@@ -390,6 +390,15 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
     localParse: (raw) => parseJson(raw, {}),
     localSerialize: (value) => serializeJson(value || {}),
   },
+  default_calendar_id: {
+    id: 'default_calendar_id',
+    label: 'Default Calendar for Invites',
+    scope: SETTING_SCOPES.DEVICE,
+    localKey: (account) => `default_calendar_id_${account}`,
+    valueType: 'string',
+    defaultValue: '',
+    accountScoped: true,
+  },
   hide_completed_todos: {
     id: 'hide_completed_todos',
     label: 'Hide Completed Todos',

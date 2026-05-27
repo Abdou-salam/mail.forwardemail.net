@@ -37,6 +37,8 @@
   let error = $state('');
   let cachedEventMatch = $state<Record<string, unknown> | null>(null);
   let conflicts = $state<Array<Record<string, unknown>>>([]);
+  let calendarList = $state<Array<Record<string, unknown>>>([]);
+  let selectedCalendarId = $state('');
 
   const isCancel = $derived(invite.method === 'CANCEL');
 
@@ -139,13 +141,21 @@
     return null;
   };
 
+  const accountKey = (): string => (Local.get('email') as string) || 'default';
+
+  const defaultCalendarKey = (): string => `default_calendar_id_${accountKey()}`;
+
+  // Selection precedence: user's saved default → calendar literally named
+  // "Calendar" → first in server-returned list. Falling back to list[0] is
+  // why invites previously appeared to land on a random calendar when the
+  // primary wasn't named "Calendar".
   const pickCalendarId = (list: unknown[]): string => {
     if (!Array.isArray(list) || list.length === 0) return '';
+    const saved = (Local.get(defaultCalendarKey()) as string) || '';
+    if (saved && list.some((c) => getCalId(c) === saved)) return saved;
     const preferred = list.find((c) => getCalLabel(c) === 'Calendar');
     return getCalId(preferred || list[0]);
   };
-
-  const accountKey = (): string => (Local.get('email') as string) || 'default';
 
   onMount(async () => {
     try {
@@ -155,6 +165,17 @@
       conflicts = findConflictingEvents(invite, events);
     } catch {
       // cache miss is fine — Phase 1 still works
+    }
+
+    // Eagerly fetch the calendar list so the picker is populated before the
+    // user clicks Add. Failures fall back to the on-demand fetch in handleAdd.
+    try {
+      const calendarsResp = await Remote.request('Calendars', {});
+      const list = extractList(calendarsResp) as Array<Record<string, unknown>>;
+      calendarList = list;
+      selectedCalendarId = pickCalendarId(list);
+    } catch {
+      // ignore — handleAdd will retry
     }
   });
 
@@ -206,14 +227,20 @@
     saving = true;
     error = '';
     try {
-      const calendarsResp = await Remote.request('Calendars', {});
-      const list = extractList(calendarsResp);
-      const calendarId = pickCalendarId(list);
+      let list = calendarList;
+      if (!list?.length) {
+        const calendarsResp = await Remote.request('Calendars', {});
+        list = extractList(calendarsResp) as Array<Record<string, unknown>>;
+        calendarList = list;
+      }
+      const calendarId = selectedCalendarId || pickCalendarId(list);
       if (!calendarId) {
         error = 'No calendar found. Open the Calendar page first.';
         saving = false;
         return;
       }
+      // Persist the user's choice as the default for future invites.
+      Local.set(defaultCalendarKey(), calendarId);
       const ical = normalizeIcsForCalendar(invite.raw);
 
       // Authoritative server-side UID check: catches both a stale local cache
@@ -440,6 +467,18 @@
               {cachedEventMatch ? 'Update event' : 'Add to calendar'}
             {/if}
           </Button>
+          {#if calendarList.length > 1}
+            <select
+              bind:value={selectedCalendarId}
+              disabled={saving}
+              class="h-9 rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              aria-label="Calendar to add this event to"
+            >
+              {#each calendarList as cal (getCalId(cal))}
+                <option value={getCalId(cal)}>{getCalLabel(cal) || getCalId(cal)}</option>
+              {/each}
+            </select>
+          {/if}
         {/if}
       </div>
 
