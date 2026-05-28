@@ -1334,9 +1334,22 @@ const createMailboxStore = () => {
       resolveInflight(undefined);
       tracer.end({ status: 'error' });
     } finally {
+      // Unblock any concurrent caller that deduped onto this request's promise
+      // (line ~959). The no-content and transient-empty branches above can
+      // return without resolving it; a still-pending deferred hangs those
+      // callers — and their loading skeleton — forever. resolveInflight is
+      // idempotent, so this is safe even when a success/error path already
+      // resolved it.
+      resolveInflight(undefined);
       // Clear in-flight tracking
       if (inFlightMessageListRequest?.key === requestKey) {
         inFlightMessageListRequest = null;
+        // We were the final in-flight request and nothing superseded us, so no
+        // later load will clear `loading`. The stale-request guards above gate
+        // loading.set(false) behind !isStaleRequest, which can strand the
+        // skeleton (loading=true) when concurrent demo-entry loaders flip the
+        // selected folder mid-flight. Clear it here as a backstop.
+        if (get(loading)) loading.set(false);
       }
     }
   };
