@@ -405,7 +405,12 @@ export function mergeFlagsAndMetadata(
   let changed = false;
 
   const nextFlags = Array.isArray(incoming.flags) ? incoming.flags : existing.flags || [];
-  if (JSON.stringify(nextFlags) !== JSON.stringify(existing.flags || [])) {
+  const existingFlags = existing.flags || [];
+  // Compare the flag *set*, not its order. The server frequently returns the
+  // same flags in a different order; treating that as a change would bump
+  // updatedAt, rewrite the record, re-index search, and re-render the row on
+  // every sync for no reason.
+  if (JSON.stringify([...nextFlags].sort()) !== JSON.stringify([...existingFlags].sort())) {
     next.flags = nextFlags;
     changed = true;
   }

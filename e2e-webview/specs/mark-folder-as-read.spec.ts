@@ -78,12 +78,16 @@ describe('mark folder as read (context menu)', () => {
       );
     }, inbox);
 
+    // Assert existence + click via the DOM rather than waitForDisplayed/
+    // waitForClickable: on the macOS-arm64 CI runner the window is ~190px tall
+    // and the popped context menu renders below the viewport, so the
+    // viewport-gated waits time out even though the menu is in the DOM.
     const menu = await browser.$('[data-testid="folder-context-menu"]');
-    await menu.waitForDisplayed({ timeout: 5_000 });
+    await menu.waitForExist({ timeout: 5_000 });
 
     const markAll = await browser.$('[data-testid="folder-mark-all-as-read"]');
-    await markAll.waitForClickable({ timeout: 5_000 });
-    await markAll.click();
+    await markAll.waitForExist({ timeout: 5_000 });
+    await browser.execute((el: Element) => (el as HTMLElement).click(), markAll);
 
     // The db-worker-callback bug surfaced as a "Failed to mark as read"
     // toast. Assert that toast did NOT appear within a reasonable window.

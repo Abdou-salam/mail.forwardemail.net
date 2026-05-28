@@ -51,7 +51,10 @@ export async function activateDemo(browser: WebdriverIO.Browser): Promise<void> 
       return (await folders.length) > 0 && (await rows.length) > 0;
     },
     {
-      timeout: 25_000,
+      // Generous ceiling for the slowest CI runner (Linux Xvfb), where the
+      // seed+first-paint routinely takes 30-40s. waitUntil resolves the moment
+      // the rows appear, so fast runners (Windows/macOS) pay nothing for it.
+      timeout: 60_000,
       timeoutMsg: 'demo data did not render (expected folder-item + message-row)',
     },
   );

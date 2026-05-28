@@ -108,6 +108,28 @@ describe('sync helpers', () => {
     expect(merged.record.modseq).toBe(2);
   });
 
+  it('treats the same flag set in a different order as unchanged', () => {
+    const existing = {
+      id: 1,
+      flags: ['\\Seen', '\\Flagged'],
+      is_unread: false,
+      is_starred: true,
+      modseq: 5,
+    };
+
+    // Server returns the identical flag set, just reordered. This must NOT be
+    // treated as a change — otherwise every background sync bumps updatedAt,
+    // rewrites the record, re-indexes search, and churns the UI for nothing.
+    const incoming = {
+      ...existing,
+      flags: ['\\Flagged', '\\Seen'],
+    };
+
+    const merged = mergeFlagsAndMetadata(existing, incoming);
+    expect(merged.changed).toBe(false);
+    expect(merged.record).toBe(existing);
+  });
+
   it('returns false when metadata unchanged', () => {
     const existing = {
       id: 1,
