@@ -215,6 +215,13 @@ jobs:
         shell: bash
         env:
           TAURI_TARGET: ${{ matrix.target }}
+          # WebKitGTK 2.40+ (both ubuntu-22.04 and 24.04) enables its
+          # DMABUF-based accelerated compositing renderer by default. Under
+          # Xvfb there is no GPU, so that path stalls — first paint crawls and
+          # the demo-readiness gate routinely overruns its timeout (the entire
+          # Linux suite ran ~17x slower per test than Windows). Forcing the
+          # renderer off restores software-rendered paint at native speed.
+          WEBKIT_DISABLE_DMABUF_RENDERER: '1'
         run: xvfb-run --auto-servernum -- pnpm test
 
       - name: Run E2E tests (macOS / Windows)

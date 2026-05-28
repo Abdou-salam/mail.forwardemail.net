@@ -46,9 +46,15 @@ export async function activateDemo(browser: WebdriverIO.Browser): Promise<void> 
   // guaranteed to appear.
   await browser.waitUntil(
     async () => {
-      const folders = await browser.$$('[data-testid="folder-item"]');
-      const rows = await browser.$$('[data-testid="message-row"]');
-      return (await folders.length) > 0 && (await rows.length) > 0;
+      // Count both in a single in-page execute rather than two browser.$$
+      // findElements round-trips per poll. On the slow Linux WebKitGTK runner
+      // each WebDriver round-trip is expensive, and polling them in a loop
+      // compounded the latency that pushed this gate over its timeout.
+      const counts = (await browser.execute(() => ({
+        folders: document.querySelectorAll('[data-testid="folder-item"]').length,
+        rows: document.querySelectorAll('[data-testid="message-row"]').length,
+      }))) as { folders: number; rows: number };
+      return counts.folders > 0 && counts.rows > 0;
     },
     {
       // Generous ceiling for the slowest CI runner (Linux Xvfb), where the
