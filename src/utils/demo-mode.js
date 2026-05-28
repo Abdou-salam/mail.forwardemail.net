@@ -248,12 +248,25 @@ export function interceptDemoRequest(action, params = {}, options = {}) {
     return { handled: true, result: getDemoData(action, params) };
   }
 
-  // Handle mark-as-read: track the ID so subsequent data generation
-  // returns the message with \Seen, keeping badge counts accurate.
+  // MessageUpdate is overloaded: a flag change (read/star toggle) carries
+  // `flags`, while a move/delete-to-trash carries only `folder`. Flag
+  // changes are allowed silently in demo (so badge + bold state stay
+  // consistent across re-fetches); folder moves are destructive writes
+  // and, per the demo contract ("move, delete show a toast"), must be
+  // blocked with the sign-up toast rather than silently pretend-applied.
   if (action === 'MessageUpdate') {
     const flags = params?.flags || params?.addFlags || [];
-    if (Array.isArray(flags) && flags.includes('\\Seen') && params?.id) {
-      _readMessageIds.add(params.id);
+    const isFlagUpdate = Array.isArray(flags) && flags.length > 0;
+    if (isFlagUpdate) {
+      if (flags.includes('\\Seen') && params?.id) {
+        _readMessageIds.add(params.id);
+      }
+      return { handled: true, result: { ok: true, demo: true } };
+    }
+    if (params?.folder) {
+      // Folder change with no flags ⇒ a move (incl. delete-to-trash).
+      showDemoBlockedToast('Move');
+      return { handled: true, result: { ok: false, demo: true, blocked: true } };
     }
     return { handled: true, result: { ok: true, demo: true } };
   }
