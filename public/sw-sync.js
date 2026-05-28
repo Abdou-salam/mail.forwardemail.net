@@ -23,6 +23,11 @@
   // blocked waiting for the SW's handles to release.
   const openDbHandles = new Set();
   let allowOpen = true;
+  // Safety net: if `close-idb` arrives but the matching `reopen-idb` never does
+  // (older client, lost message, tab closed mid-recovery), auto re-enable opens
+  // so background sync isn't disabled forever. Cleared when `reopen-idb` lands.
+  let reopenSafetyTimer = null;
+  const REOPEN_SAFETY_MS = 10000;
 
   const DEFAULT_PAGE_SIZE = 100;
 
@@ -805,8 +810,14 @@
         }
       });
       openDbHandles.clear();
+      clearTimeout(reopenSafetyTimer);
+      reopenSafetyTimer = setTimeout(() => {
+        allowOpen = true;
+      }, REOPEN_SAFETY_MS);
       event.ports?.[0]?.postMessage?.({ ok: true });
     } else if (data.type === 'reopen-idb') {
+      clearTimeout(reopenSafetyTimer);
+      reopenSafetyTimer = null;
       allowOpen = true;
       event.ports?.[0]?.postMessage?.({ ok: true });
     }

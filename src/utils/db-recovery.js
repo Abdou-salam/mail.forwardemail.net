@@ -99,6 +99,35 @@ async function closeServiceWorkerDb(timeoutMs = 1500) {
   }
 }
 
+/**
+ * Tell the service worker it may open IndexedDB again after a recovery delete.
+ * Symmetric counterpart to closeServiceWorkerDb(): `close-idb` latches the SW's
+ * `allowOpen` flag to false so the in-flight delete isn't blocked, and this
+ * `reopen-idb` resets it to true. Without this, the SW can never reopen the DB
+ * and every future background sync fails with "SW IDB closed for recovery",
+ * forcing the app onto slow live-network fetches.
+ * Silent no-op when no SW is registered or no ack arrives within `timeoutMs`.
+ */
+async function reopenServiceWorkerDb(timeoutMs = 1500) {
+  try {
+    const sw = typeof navigator !== 'undefined' ? navigator.serviceWorker : null;
+    const target = sw?.controller;
+    if (!target) return;
+    const channel = new MessageChannel();
+    const ack = new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(false), timeoutMs);
+      channel.port1.onmessage = () => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+    });
+    target.postMessage({ type: 'reopen-idb' }, [channel.port2]);
+    await ack;
+  } catch (err) {
+    warn('[DB Recovery] Could not signal SW to reopen IDB:', err);
+  }
+}
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -150,11 +179,17 @@ export async function deleteDatabase() {
   await terminateWorkers();
   await closeServiceWorkerDb();
   await delay(100);
-  const result = await deleteDatabaseByName(DB_NAME);
-  if (!result.deleted) {
-    throw new Error('Database deletion failed');
+  try {
+    const result = await deleteDatabaseByName(DB_NAME);
+    if (!result.deleted) {
+      throw new Error('Database deletion failed');
+    }
+    return true;
+  } finally {
+    // Always re-allow the SW to open IndexedDB, even if the delete failed —
+    // leaving it latched closed permanently breaks background sync.
+    await reopenServiceWorkerDb();
   }
-  return true;
 }
 
 /**
