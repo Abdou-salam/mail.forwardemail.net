@@ -1086,6 +1086,11 @@ export const contextLabel = async (msgOrLabel, labelMaybe, options = {}) => {
   }
 };
 
+// Max concurrent /v1/folders/:id detail requests when discovering label flags.
+// Bounds the fan-out so label load doesn't serialize one round-trip per folder,
+// while staying polite to the API.
+export const FOLDER_FLAG_FETCH_CONCURRENCY = 6;
+
 /**
  * Load labels for the current account
  */
@@ -1196,24 +1201,41 @@ export const loadLabels = async (options = {}) => {
         folderList = get(mailboxStore.state.folders) || [];
       }
       if ((Local.get('email') || 'default') !== initialAccount) return;
-      for (const folder of folderList) {
-        if (!folder?.id) continue;
-        try {
-          const detail = await Remote.request(
-            'FolderGet',
-            {},
-            { method: 'GET', pathOverride: `/v1/folders/${encodeURIComponent(folder.id)}` },
-          );
-          const flags = detail?.flags || detail?.Flags || [];
-          (flags || []).forEach((flag) => {
-            const label = normalizeLabel(flag, folder.path);
-            if (label && !labelMap.has(label.id)) {
-              labelMap.set(label.id, label);
-            }
-          });
-        } catch (err) {
-          warn('loadLabels folder detail failed', err);
+      // Fetch folder details with bounded concurrency instead of one
+      // sequential round-trip per folder. Results are kept in folder order and
+      // merged afterwards so the first-write-wins behaviour is unchanged.
+      const details: Array<{ folder: (typeof folderList)[number]; flags: string[] } | null> =
+        new Array(folderList.length).fill(null);
+      let cursor = 0;
+      const fetchNext = async () => {
+        while (true) {
+          const idx = cursor++;
+          if (idx >= folderList.length) return;
+          const folder = folderList[idx];
+          if (!folder?.id) continue;
+          try {
+            const detail = await Remote.request(
+              'FolderGet',
+              {},
+              { method: 'GET', pathOverride: `/v1/folders/${encodeURIComponent(folder.id)}` },
+            );
+            details[idx] = { folder, flags: detail?.flags || detail?.Flags || [] };
+          } catch (err) {
+            warn('loadLabels folder detail failed', err);
+          }
         }
+      };
+      const workers = Math.min(FOLDER_FLAG_FETCH_CONCURRENCY, folderList.length);
+      await Promise.all(Array.from({ length: workers }, fetchNext));
+      // Merge in original folder order to preserve first-write-wins per label id.
+      for (const entry of details) {
+        if (!entry) continue;
+        (entry.flags || []).forEach((flag) => {
+          const label = normalizeLabel(flag, entry.folder.path);
+          if (label && !labelMap.has(label.id)) {
+            labelMap.set(label.id, label);
+          }
+        });
       }
     } catch (err) {
       warn('loadLabels from folders failed', err);

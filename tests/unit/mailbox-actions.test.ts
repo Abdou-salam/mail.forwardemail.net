@@ -237,6 +237,9 @@ vi.mock('../../src/stores/settingsStore', () => {
     createLabel: vi.fn().mockResolvedValue({}),
     updateLabel: vi.fn().mockResolvedValue({}),
     deleteLabel: vi.fn().mockResolvedValue({}),
+    // Returning a label keeps loadLabels' labelMap non-empty so it skips the
+    // first-load message scan and proceeds to the folder-flag fetch path.
+    fetchLabels: vi.fn().mockResolvedValue([{ keyword: 'work', name: 'Work', color: '#abc' }]),
     settingsActions: { setBodyIndexing: vi.fn() },
     bodyIndexing: writable(false),
     loadProfileName: vi.fn(),
@@ -291,7 +294,13 @@ vi.mock('../../src/utils/db', () => {
       settings: { get: () => hoisted.settingsGet() },
       settingsLabels: { get: () => hoisted.settingsLabelsGet() },
       labels: {
-        where: () => ({ equals: () => ({ toArray: () => hoisted.labelsToArray() }) }),
+        where: () => ({
+          equals: () => ({
+            toArray: () => hoisted.labelsToArray(),
+            delete: vi.fn().mockResolvedValue(undefined),
+          }),
+        }),
+        bulkPut: vi.fn().mockResolvedValue(undefined),
       },
       drafts: chain,
     },
@@ -309,6 +318,9 @@ import {
   addForwardPrefix,
   stripQuoteCollapseMarkup,
   getMessageBodyForReply,
+  loadLabels,
+  FOLDER_FLAG_FETCH_CONCURRENCY,
+  availableLabels,
   currentAccount,
   accountMenuOpen,
 } from '../../src/stores/mailboxActions.ts';
@@ -574,5 +586,62 @@ describe('reply / forward helpers', () => {
     expect(out).toContain('<div>');
     expect(out).toContain('<br>');
     expect(out).toContain('Hello');
+  });
+});
+
+describe('loadLabels folder-flag fetch (#2 fan-out)', () => {
+  const makeFolders = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ id: `f${i}`, path: `Folder${i}` }));
+
+  // Instrument Remote.request to record the maximum number of folder-detail
+  // requests in flight at once. Serial code never exceeds 1; bounded-parallel
+  // code reaches the concurrency cap.
+  const instrumentConcurrency = () => {
+    let inFlight = 0;
+    const tracker = { max: 0 };
+    hoisted.remoteRequest.mockImplementation(async () => {
+      inFlight++;
+      if (inFlight > tracker.max) tracker.max = inFlight;
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight--;
+      return { flags: [] };
+    });
+    return tracker;
+  };
+
+  it('fetches every folder but does not serialize the requests', async () => {
+    const folders = makeFolders(12);
+    mailboxStore.state.folders.set(folders);
+    const tracker = instrumentConcurrency();
+
+    await loadLabels({ includeFolderFlags: true });
+
+    // Every folder is still fetched...
+    expect(hoisted.remoteRequest).toHaveBeenCalledTimes(folders.length);
+    // ...but they overlap rather than running one-at-a-time.
+    expect(tracker.max).toBeGreaterThan(1);
+  });
+
+  it('bounds concurrency to FOLDER_FLAG_FETCH_CONCURRENCY', async () => {
+    mailboxStore.state.folders.set(makeFolders(FOLDER_FLAG_FETCH_CONCURRENCY * 3));
+    const tracker = instrumentConcurrency();
+
+    await loadLabels({ includeFolderFlags: true });
+
+    expect(tracker.max).toBeGreaterThan(1);
+    expect(tracker.max).toBeLessThanOrEqual(FOLDER_FLAG_FETCH_CONCURRENCY);
+  });
+
+  it('still hits the correct per-folder endpoint and merges discovered flags', async () => {
+    mailboxStore.state.folders.set([{ id: 'inbox-id', path: 'INBOX' }]);
+    hoisted.remoteRequest.mockResolvedValue({ flags: ['ProjectX'] });
+
+    await loadLabels({ includeFolderFlags: true });
+
+    const [, , opts] = hoisted.remoteRequest.mock.calls[0];
+    expect(opts.method).toBe('GET');
+    expect(opts.pathOverride).toBe('/v1/folders/inbox-id');
+    const labels = get(availableLabels);
+    expect(labels.some((l) => l.id === 'ProjectX')).toBe(true);
   });
 });
