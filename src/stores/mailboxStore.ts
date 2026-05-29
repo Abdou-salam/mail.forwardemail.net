@@ -1,6 +1,8 @@
 import { writable, get } from 'svelte/store';
 import Dexie from 'dexie';
 import { Remote } from '../utils/remote';
+import { e2eTrace } from '../utils/bootstrap-ready.js'; // TEMPORARY: demo-stall diagnosis
+import { isDemoMode } from '../utils/demo-mode'; // TEMPORARY: demo-stall diagnosis
 import { db } from '../utils/db';
 import { Local } from '../utils/storage';
 import { searchStore } from './searchStore';
@@ -61,6 +63,7 @@ import {
 import { effectiveLayoutMode } from './settingsStore';
 import { normalizeLayoutMode } from './settingsRegistry';
 import { warn } from '../utils/logger.ts';
+import { folderMessageCache } from './folder-message-cache';
 import { isOnline } from '../utils/network-status';
 import { getAuthHeader } from '../utils/auth';
 
@@ -70,10 +73,6 @@ const ALWAYS_PROTECTED = new Set(['INBOX', 'OUTBOX']);
 const EXPANDED_FOLDERS_KEY = 'folder_expansion_state';
 const FOLDERS_CACHE_TTL = 15000;
 const folderLoadState = new Map();
-
-// In-memory cache for instant folder switching (avoids async IDB read latency)
-// Keyed by "account:folder:page", stores processed messages ready for display
-const folderMessageCache = new Map();
 
 // Track optimistically deleted message IDs to prevent stale server responses
 // from re-adding them to the store. Entries auto-expire after 60 seconds
@@ -615,7 +614,12 @@ const createMailboxStore = () => {
     // Settings.svelte is always mounted and its currentAccount subscription
     // calls loadFolders() — without this guard it triggers sync-worker and
     // Remote.request errors because auth headers are missing.
-    if (!getAuthHeader({ allowApiKey: true })) {
+    const hasAuth = !!getAuthHeader({ allowApiKey: true });
+    e2eTrace(
+      `loadFolders auth=${hasAuth} demo=${isDemoMode()} email=${Local.get('email') || 'none'} have=${get(folders)?.length ?? 0}`,
+    );
+    if (!hasAuth) {
+      e2eTrace('loadFolders BAIL no-auth');
       return;
     }
 
@@ -673,8 +677,12 @@ const createMailboxStore = () => {
         try {
           const res = await sendSyncRequest('folders', { account });
           list = res?.folders || [];
-        } catch {
+          e2eTrace(`loadFolders sync-worker n=${list?.length ?? 0}`);
+        } catch (syncErr) {
           // Fallback to main thread fetch
+          e2eTrace(
+            `loadFolders sync-worker threw -> Remote fallback: ${String(syncErr).slice(0, 80)}`,
+          );
           const res = await Remote.request(
             'Folders',
             {},
@@ -703,6 +711,7 @@ const createMailboxStore = () => {
           throw new Error('account_switched');
         }
 
+        e2eTrace(`loadFolders DONE set n=${mapped.length}`);
         folders.set(mapped);
 
         // Always set default folder to INBOX if no folder is selected
@@ -829,6 +838,9 @@ const createMailboxStore = () => {
   const loadMessages = async () => {
     const account = Local.get('email') || 'default';
     const folder = get(selectedFolder);
+    e2eTrace(
+      `loadMessages start folder=${folder || 'none'} demo=${isDemoMode()} auth=${!!getAuthHeader({ allowApiKey: true })} loading=${get(loading)}`,
+    );
     const currentPage = get(page);
     const limit = getLimit();
     const startIdx = (currentPage - 1) * limit;
@@ -1351,6 +1363,9 @@ const createMailboxStore = () => {
         // selected folder mid-flight. Clear it here as a backstop.
         if (get(loading)) loading.set(false);
       }
+      e2eTrace(
+        `loadMessages finally key=${requestKey} stillInFlight=${inFlightMessageListRequest?.key === requestKey} msgs=${get(messages)?.length ?? 0} loading=${get(loading)}`,
+      );
     }
   };
 
