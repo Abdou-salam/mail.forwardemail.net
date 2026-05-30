@@ -4,6 +4,7 @@ import { resolveAppBinary } from '../support/platform.js';
 import { openApp } from '../support/app.js';
 import { clearStorage } from '../support/state.js';
 import { activateDemo } from '../support/demo.js';
+import { nativeClick } from '../support/interact.js';
 
 describe('mark as read (optimistic update)', () => {
   let browser: WebdriverIO.Browser;
@@ -52,12 +53,10 @@ describe('mark as read (optimistic update)', () => {
     expect(messageId).toBeTruthy();
 
     const checkbox = await target.$('[data-slot="checkbox"]');
-    await checkbox.waitForClickable({ timeout: 10_000 });
-    await checkbox.click();
+    await nativeClick(browser, checkbox);
 
     const markRead = await browser.$('[aria-label="Mark selected as read"]');
-    await markRead.waitForClickable({ timeout: 10_000 });
-    await markRead.click();
+    await nativeClick(browser, markRead);
 
     // Optimistic store update + re-render should flip data-unread on this row.
     const selector = `[data-testid="message-row"][data-message-id="${messageId}"]`;
@@ -82,9 +81,9 @@ describe('mark as read (optimistic update)', () => {
 
     const unreadRows = await browser.$$('[data-testid="message-row"][data-unread="true"]');
     const checkbox = await unreadRows[0].$('[data-slot="checkbox"]');
-    await checkbox.click();
+    await nativeClick(browser, checkbox);
     const markRead = await browser.$('[aria-label="Mark selected as read"]');
-    await markRead.click();
+    await nativeClick(browser, markRead);
 
     await browser.waitUntil(
       async () => (await $$count('[data-testid="message-row"][data-unread="true"]')) === before - 1,

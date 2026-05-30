@@ -943,76 +943,85 @@ const createMailboxStore = () => {
       }
     }
 
-    try {
-      tracer.stage('cache_read_start');
-      let pageSlice = [];
-      if (currentSort === 'newest' || currentSort === 'oldest') {
-        const range = db.messages
-          .where('[account+folder+date]')
-          .between([account, folder, Dexie.minKey], [account, folder, Dexie.maxKey], true, true);
-        const ordered = currentSort === 'newest' ? range.reverse() : range;
-        pageSlice = await ordered.offset(startIdx).limit(limit).toArray();
-      } else {
-        const cached = await db.messages
-          .where('[account+folder]')
-          .equals([account, folder])
-          .toArray();
-        const sorted = sortMessages(cached, currentSort);
-        pageSlice = sorted.slice(startIdx, startIdx + limit);
-      }
-      cachedPage = pageSlice.map((msg) => {
-        const decodedSubject = decodeMimeHeader(msg.subject || msg.Subject || '(No subject)');
-        return {
-          ...msg,
-          subject: decodedSubject,
-          normalizedSubject:
-            msg.normalizedSubject || normalizeSubjectMemoized(decodedSubject || msg.subject || ''),
-          is_starred:
-            msg.is_starred ?? (Array.isArray(msg.flags) ? msg.flags.includes('\\Flagged') : false),
-        };
-      });
-      tracer.stage('cache_read_end', { count: cachedPage.length });
-      if (cachedPage.length) {
-        const activeNow = Local.get('email') || 'default';
-        if (activeNow !== account) {
-          return;
+    // Demo mode keeps messages in-memory: the demo interceptor is the source of
+    // truth, so skip the db.messages read entirely. Persisting ephemeral demo
+    // data is pointless, and the db worker's IndexedDB read stalls on
+    // Linux/WebKitGTK — folders rendered but the message list stayed stuck on
+    // its skeleton because loadMessages hung here, before its demo/Remote
+    // fallback. Mirrors loadFolders' demo fast-path.
+    if (!isDemoMode())
+      try {
+        tracer.stage('cache_read_start');
+        let pageSlice = [];
+        if (currentSort === 'newest' || currentSort === 'oldest') {
+          const range = db.messages
+            .where('[account+folder+date]')
+            .between([account, folder, Dexie.minKey], [account, folder, Dexie.maxKey], true, true);
+          const ordered = currentSort === 'newest' ? range.reverse() : range;
+          pageSlice = await ordered.offset(startIdx).limit(limit).toArray();
+        } else {
+          const cached = await db.messages
+            .where('[account+folder]')
+            .equals([account, folder])
+            .toArray();
+          const sorted = sortMessages(cached, currentSort);
+          pageSlice = sorted.slice(startIdx, startIdx + limit);
         }
-        // Only update the store if LRU didn't already provide data — avoids
-        // a redundant messages.set() that causes visible flicker during sync.
-        if (!memCached?.messages?.length) {
-          const nextCached = shouldAppend
-            ? mergeMessagePages(get(messages), cachedPage)
-            : cachedPage;
-          messages.set(applyPendingFlagMutations(filterPendingDeletes(nextCached)));
-          loading.set(false);
-          if (
-            allowAutoSelect &&
-            (!get(selectedMessage) || get(selectedMessage)?.folder !== folder)
-          ) {
-            selectedMessage.set(findFirstMessage(nextCached, currentSort));
-          }
-        }
-        folderMessageCache.set(memKey, {
-          messages: cachedPage,
-          hasNextPage: get(hasNextPage),
+        cachedPage = pageSlice.map((msg) => {
+          const decodedSubject = decodeMimeHeader(msg.subject || msg.Subject || '(No subject)');
+          return {
+            ...msg,
+            subject: decodedSubject,
+            normalizedSubject:
+              msg.normalizedSubject ||
+              normalizeSubjectMemoized(decodedSubject || msg.subject || ''),
+            is_starred:
+              msg.is_starred ??
+              (Array.isArray(msg.flags) ? msg.flags.includes('\\Flagged') : false),
+          };
         });
-        if (isBasicQuery) {
-          try {
-            const totalCount = await db.messages
-              .where('[account+folder]')
-              .equals([account, folder])
-              .count();
-            if ((Local.get('email') || 'default') === account) {
-              hasNextPage.set(totalCount > startIdx + limit);
+        tracer.stage('cache_read_end', { count: cachedPage.length });
+        if (cachedPage.length) {
+          const activeNow = Local.get('email') || 'default';
+          if (activeNow !== account) {
+            return;
+          }
+          // Only update the store if LRU didn't already provide data — avoids
+          // a redundant messages.set() that causes visible flicker during sync.
+          if (!memCached?.messages?.length) {
+            const nextCached = shouldAppend
+              ? mergeMessagePages(get(messages), cachedPage)
+              : cachedPage;
+            messages.set(applyPendingFlagMutations(filterPendingDeletes(nextCached)));
+            loading.set(false);
+            if (
+              allowAutoSelect &&
+              (!get(selectedMessage) || get(selectedMessage)?.folder !== folder)
+            ) {
+              selectedMessage.set(findFirstMessage(nextCached, currentSort));
             }
-          } catch {
-            // ignore count failures
+          }
+          folderMessageCache.set(memKey, {
+            messages: cachedPage,
+            hasNextPage: get(hasNextPage),
+          });
+          if (isBasicQuery) {
+            try {
+              const totalCount = await db.messages
+                .where('[account+folder]')
+                .equals([account, folder])
+                .count();
+              if ((Local.get('email') || 'default') === account) {
+                hasNextPage.set(totalCount > startIdx + limit);
+              }
+            } catch {
+              // ignore count failures
+            }
           }
         }
+      } catch (err) {
+        warn('cached load failed', err);
       }
-    } catch (err) {
-      warn('cached load failed', err);
-    }
 
     // Build request key for deduplication
     const requestKey = `${account}:${folder}:${currentPage}:${limit}:${sortParam}:${queryParam}:${get(unreadOnly)}:${get(hasAttachmentsOnly)}`;
@@ -1286,7 +1295,11 @@ const createMailboxStore = () => {
       confirmFlagMutations(merged);
 
       let prunedIds: string[] = [];
-      if (merged.length || shouldPrune) {
+      // Demo mode: don't persist/prune ephemeral demo messages in IndexedDB —
+      // pointless, and the db worker write stalls on Linux/WebKitGTK, which
+      // would strand loadMessages before its finally (loading never clears,
+      // the dedup deferred never resolves). The store is already updated above.
+      if (!isDemoMode() && (merged.length || shouldPrune)) {
         // Resolve in-flight mutation IDs before opening the tx so we don't
         // clobber an optimistic move/label whose server round-trip hasn't
         // completed yet. If the queue read fails, skip pruning this pass.
@@ -1363,8 +1376,13 @@ const createMailboxStore = () => {
         });
       }, 0);
 
-      if (source !== 'worker') {
-        // Update local search index with retry logic (fallback path)
+      if (source !== 'worker' && !isDemoMode()) {
+        // Update local search index with retry logic (fallback path).
+        // Skipped in demo mode: indexing ephemeral demo messages is pointless,
+        // and awaiting the search worker can stall on Linux/WebKitGTK, which
+        // would strand loadMessages here before its finally (loading never
+        // clears, dedup deferred never resolves) even though the store and the
+        // visible message list are already updated above.
         try {
           await searchStore.actions.indexMessages(merged);
         } catch (err) {

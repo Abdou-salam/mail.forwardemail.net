@@ -4,6 +4,7 @@ import { resolveAppBinary } from '../support/platform.js';
 import { openApp } from '../support/app.js';
 import { clearStorage } from '../support/state.js';
 import { activateDemo } from '../support/demo.js';
+import { nativeClick } from '../support/interact.js';
 
 describe('demo write actions are blocked with a toast', () => {
   let browser: WebdriverIO.Browser;
@@ -42,18 +43,15 @@ describe('demo write actions are blocked with a toast', () => {
     // Toggle the first row's checkbox to enter selection mode.
     const rows = await browser.$$('[data-testid="message-row"]');
     const checkbox = await rows[0].$('[data-slot="checkbox"]');
-    await checkbox.waitForClickable({ timeout: 10_000 });
-    await checkbox.click();
+    await nativeClick(browser, checkbox);
 
     // Selection toolbar exposes the Delete button.
     const del = await browser.$('[aria-label="Delete selected"]');
-    await del.waitForClickable({ timeout: 10_000 });
-    await del.click();
+    await nativeClick(browser, del);
 
     // Confirm the destructive action.
     const confirmBtn = await browser.$('[data-testid="confirm-dialog-confirm"]');
-    await confirmBtn.waitForClickable({ timeout: 10_000 });
-    await confirmBtn.click();
+    await nativeClick(browser, confirmBtn);
 
     // Demo interceptor blocks MessageDelete and surfaces the toast. The
     // generic [data-testid="toast-message"] selector also matches transient
