@@ -6,6 +6,7 @@ import { saveSentCopy } from './sent-copy.js';
 import { warn } from './logger.ts';
 import { isDemoMode, showDemoBlockedToast } from './demo-mode';
 import { isOnline } from './network-status';
+import { exponentialBackoff } from './backoff.js';
 
 /**
  * Outbox Service
@@ -45,13 +46,10 @@ function getAccount() {
 }
 
 /**
- * Calculate exponential backoff delay
+ * Calculate exponential backoff delay (shared formula — see ./backoff.js)
  */
 function calculateBackoff(retryCount) {
-  const delay = Math.min(BASE_BACKOFF_MS * Math.pow(2, retryCount), MAX_BACKOFF_MS);
-  // Add jitter (0-20% of delay)
-  const jitter = delay * Math.random() * 0.2;
-  return Math.floor(delay + jitter);
+  return exponentialBackoff(retryCount, { baseMs: BASE_BACKOFF_MS, maxMs: MAX_BACKOFF_MS });
 }
 
 /**

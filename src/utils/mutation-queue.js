@@ -7,6 +7,7 @@ import { writable } from 'svelte/store';
 import { warn } from './logger.ts';
 import { isOnline } from './network-status';
 import { swReadyWithTimeout, isTauri } from './platform.js';
+import { exponentialBackoff } from './backoff.js';
 
 /**
  * Offline Mutation Queue
@@ -45,8 +46,7 @@ function queueKey(account) {
 }
 
 function calculateBackoff(retryCount) {
-  const delay = Math.min(BASE_BACKOFF_MS * Math.pow(2, retryCount), MAX_BACKOFF_MS);
-  return Math.floor(delay + delay * Math.random() * 0.2);
+  return exponentialBackoff(retryCount, { baseMs: BASE_BACKOFF_MS, maxMs: MAX_BACKOFF_MS });
 }
 
 /**
