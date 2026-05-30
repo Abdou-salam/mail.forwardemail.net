@@ -1854,9 +1854,25 @@ async function bootstrap() {
       },
     });
 
-    // Initialize database with automatic recovery
-    const dbResult = await initializeDatabase();
-    if (!dbResult.success) {
+    // Initialize database with automatic recovery.
+    //
+    // The local database is a CACHE, not a boot dependency. Don't let a slow or
+    // hung db init block the rest of bootstrap — in particular `_bootstrapComplete`
+    // (which gates lazily mounting Calendar/Contacts) and markAppReady(). Two
+    // real cases stall it: the db worker can take ~10s to time out under CI/cold
+    // load before falling back to the main thread (seen on macOS too, not just
+    // Linux), and WebKitGTK can stall IndexedDB indefinitely. Either way the UI
+    // must still boot. Race the init against a short ceiling; if the real init
+    // resolves later the cache simply attaches then, and the read/write paths
+    // already tolerate a not-yet-ready cache (they fall through to the network /
+    // demo interceptor).
+    const dbResult = (await Promise.race([
+      initializeDatabase(),
+      new Promise((resolve) => setTimeout(() => resolve({ success: false, timedOut: true }), 4000)),
+    ])) as { success: boolean; error?: unknown; recovered?: boolean; timedOut?: boolean };
+    if (dbResult.timedOut) {
+      console.warn('[DB] Database init slow; continuing boot — cache will attach when ready');
+    } else if (!dbResult.success) {
       console.error('[DB] Database initialization failed:', dbResult.error);
       // Show a persistent error toast
       toasts?.show?.(
@@ -2089,8 +2105,24 @@ async function bootstrap() {
     // on subsequent route changes (e.g. navigating to calendar/contacts).
     _bootstrapComplete = true;
 
-    // Mount Calendar and Contacts lazily on first authenticated route
-    if (mailboxMode) {
+    // Mount Calendar and Contacts lazily on first authenticated route.
+    //
+    // Re-check the CURRENT route, not the bootstrap-time `mailboxMode`: the user
+    // may have entered the app (demo entry → mailbox/calendar) WHILE bootstrap
+    // was still in its async db-init phase, and those route changes were gated
+    // out of routeStore.subscribe by `_bootstrapComplete` being false. Using the
+    // stale `mailboxMode` (which is `login` on the initial page load) would skip
+    // the mount entirely, leaving e.g. the Calendar view blank after navigating
+    // to it during bootstrap.
+    const liveRoute = currentRoute();
+    const liveMailboxMode =
+      liveRoute === 'mailbox' ||
+      liveRoute === 'settings' ||
+      liveRoute === 'profile' ||
+      liveRoute === 'calendar' ||
+      liveRoute === 'contacts';
+
+    if (liveMailboxMode) {
       mountCalendar();
       mountContacts();
       // Dispose starfield if it was started (e.g. from the initial
@@ -2101,7 +2133,7 @@ async function bootstrap() {
       }
     }
 
-    if (!starfieldDisposer && !mailboxMode) {
+    if (!starfieldDisposer && !liveMailboxMode) {
       starfieldDisposer = initStarfield();
     }
 
@@ -2114,8 +2146,10 @@ async function bootstrap() {
     // errors because auth headers are missing.  The _backgroundServicesStarted
     // flag ensures they only start once; if bootstrap runs on the login page
     // the routeStore.subscribe handler will start them on the first
-    // post-login route change instead.
-    if (mailboxMode && !_backgroundServicesStarted) {
+    // post-login route change instead.  Use the live route (see mount note
+    // above) so services still start when the user entered the app during the
+    // async bootstrap phase.
+    if (liveMailboxMode && !_backgroundServicesStarted) {
       _backgroundServicesStarted = true;
       startAutoMetadataSync();
       initKeyboardShortcuts();
