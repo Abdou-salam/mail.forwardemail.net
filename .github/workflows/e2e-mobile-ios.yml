@@ -63,9 +63,16 @@ jobs:
           pod --version
 
       - name: Install Appium 2 + XCUITest driver
+        # Pin xcuitest to 9.10.5 — the last release whose appium peerDep
+        # accepts Appium 2.x (^2.5.4). Versions >=10.0.0 require Appium
+        # ^3.0.0-rc.2, which is still RC, so `appium driver install xcuitest`
+        # (latest) aborts with "server version it requires (^3.0.0-rc.2) does
+        # not meet the currently installed one". Bump both together when
+        # Appium 3 ships stable. Mirrors the uiautomator2@4.2.9 pin in
+        # e2e-mobile-android.yml.
         run: |
           npm install -g appium@^2
-          appium driver install xcuitest
+          appium driver install xcuitest@9.10.5
 
       - name: Initialize iOS project
         env:
