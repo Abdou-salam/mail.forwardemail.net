@@ -26,6 +26,7 @@ import { normalizeLayoutMode } from './settingsRegistry';
 import { getMessageApiId } from '../utils/sync-helpers';
 import { startInitialSync, queueBodiesForFolder } from '../utils/sync-controller';
 import { resetSyncWorkerReady } from '../utils/sync-worker-client.js';
+import { isDemoMode } from '../utils/demo-mode';
 import { clearMailServiceState } from './mailService';
 import { normalizeEmail, dedupeAddresses, extractAddressList } from '../utils/address.ts';
 import { validateLabelName } from '../utils/label-validation.ts';
@@ -268,7 +269,14 @@ export const load = async () => {
     mergeNewLabels(loadedMsgs, nextAccount).catch(() => {});
 
     const folders = get(mailboxStore.state.folders) || [];
-    if (folders.length) {
+    // Demo mode is a sandboxed, fully local experience — its folders/messages
+    // come from the in-memory demo interceptor, not a real backend. Running the
+    // background metadata/body sync there spins the sync worker against fake
+    // data and, worse, re-renders the message list mid-interaction (the
+    // "Syncing <folder>" progress churn). That churn is a real source of
+    // flakiness in interaction e2e on slow runners (selection/toast races) and
+    // serves no purpose in demo, so skip it entirely.
+    if (folders.length && !isDemoMode()) {
       startInitialSync(nextAccount, folders, { wantBodies: false });
       queueBodiesForFolder('INBOX', nextAccount, { bodyLimit: 100 });
     }

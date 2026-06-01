@@ -45,12 +45,16 @@ describe('demo write actions are blocked with a toast', () => {
     const checkbox = await rows[0].$('[data-slot="checkbox"]');
     await nativeClick(browser, checkbox);
 
-    // Selection toolbar exposes the Delete button.
+    // Wait for the selection toolbar (the Delete button only exists in
+    // selection mode) before clicking — firing blind raced the selection
+    // state settling on the slow macos-x64 runner.
     const del = await browser.$('[aria-label="Delete selected"]');
+    await del.waitForDisplayed({ timeout: 15_000 });
     await nativeClick(browser, del);
 
-    // Confirm the destructive action.
+    // Wait for the confirm dialog to mount before confirming.
     const confirmBtn = await browser.$('[data-testid="confirm-dialog-confirm"]');
+    await confirmBtn.waitForDisplayed({ timeout: 15_000 });
     await nativeClick(browser, confirmBtn);
 
     // Demo interceptor blocks MessageDelete and surfaces the toast. The
