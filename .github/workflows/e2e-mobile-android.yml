@@ -110,34 +110,12 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: pixel_6
-          script: |
-            # NB: android-emulator-runner runs this with /usr/bin/sh (dash),
-            # which does NOT support `set -o pipefail` — using it aborts the
-            # whole script on line 1 ("Illegal option -o pipefail", exit 2)
-            # before Appium or the tests ever run, which silently produced a
-            # green job that tested nothing. `set -eu` is dash-compatible.
-            set -eu
-            APK_PATH="$(find src-tauri/gen/android/app/build/outputs/apk -name '*.apk' -path '*x86_64*' | head -n1)"
-            if [ -z "$APK_PATH" ]; then
-              echo "::error::No APK found under src-tauri/gen/android/app/build/outputs/apk"
-              exit 1
-            fi
-            APK_PATH="$(realpath "$APK_PATH")"
-            echo "Using APK: $APK_PATH"
-            export APK_PATH
-
-            appium --port 4723 > appium.log 2>&1 &
-            APPIUM_PID=$!
-            trap 'kill $APPIUM_PID 2>/dev/null || true' EXIT
-
-            # Wait for Appium to be ready (max 30s).
-            for i in $(seq 1 30); do
-              if curl -sf http://127.0.0.1:4723/status > /dev/null; then break; fi
-              sleep 1
-            done
-
-            cd e2e-mobile
-            pnpm test
+          # The emulator-runner's parseScript() splits `script` on newlines and
+          # runs each line in its own `sh -c`, so a multi-line inline script
+          # breaks (the `if` line parses alone → "expecting fi") and loses
+          # variables between lines. Invoke a single committed bash file instead
+          # — it runs as one coherent shell. See e2e-mobile/run-android-e2e.sh.
+          script: bash e2e-mobile/run-android-e2e.sh
 
       - name: Upload Appium log
         if: always()
