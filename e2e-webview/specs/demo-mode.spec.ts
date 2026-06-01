@@ -54,7 +54,13 @@ describe('demo mode', () => {
     await calendar.waitForClickable({ timeout: 15_000 });
     await calendar.click();
     const header = await browser.$('[data-testid="calendar-header"]');
-    await header.waitForDisplayed({ timeout: 15_000 });
+    // Calendar is the heaviest lazy-mounted view (month grid + data load). On
+    // the slowest runner (macos-15-intel — ~3× the arm64 build time, heavily
+    // loaded) it has rendered just past the old 15s window: failure
+    // screenshots showed the full calendar already painted. Give it the same
+    // slow-runner headroom as the 60s readiness gate; the header is otherwise
+    // static and appears on mount.
+    await header.waitForDisplayed({ timeout: 30_000 });
     expect(await header.isDisplayed()).toBe(true);
   });
 });
