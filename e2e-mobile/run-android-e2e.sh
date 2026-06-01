@@ -35,6 +35,14 @@ APK_PATH="$(realpath "$APK_PATH")"
 echo "Using APK: $APK_PATH"
 export APK_PATH
 
+# Capture logcat in the background so a renderer/emulator crash is diagnosable
+# after the fact (lowmemorykiller / OOM vs an app tombstone). Written to the
+# repo root and uploaded as an artifact by the workflow. Best-effort: if the
+# emulator dies, logcat stops but we keep everything up to the crash.
+adb logcat -c 2>/dev/null || true
+adb logcat > logcat.log 2>&1 &
+LOGCAT_PID=$!
+
 # Switching into the Android System WebView context needs a Chromedriver that
 # matches the emulator's WebView (Chrome 113 on the API 34 image); the version
 # bundled with uiautomator2 won't ("No Chromedriver found that can automate
@@ -42,7 +50,7 @@ export APK_PATH
 # driver fetches the matching Chromedriver on demand at context-switch time.
 appium --port 4723 --allow-insecure=uiautomator2:chromedriver_autodownload > appium.log 2>&1 &
 APPIUM_PID=$!
-trap 'kill "$APPIUM_PID" 2>/dev/null || true' EXIT
+trap 'kill "$APPIUM_PID" "$LOGCAT_PID" 2>/dev/null || true' EXIT
 
 # Wait for Appium to be ready (max 30s).
 for _ in $(seq 1 30); do

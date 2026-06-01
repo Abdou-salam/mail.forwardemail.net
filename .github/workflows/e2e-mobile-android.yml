@@ -110,6 +110,16 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: pixel_6
+          # The default AVD RAM (~2GB) OOM-killed the WebView renderer — and
+          # took the whole emulator offline ("device not found") — while it
+          # loaded the full webmail bundle (1.5MB JS + Dexie + a Chrome render
+          # process). Give it generous RAM (the ubuntu runner has 16GB).
+          ram-size: 6144
+          heap-size: 1024
+          # Headless-CI stability: software GPU, no snapshot/animation/audio.
+          # (Overrides the action defaults, so the -no-window/-gpu flags must be
+          # repeated here.)
+          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           # The emulator-runner's parseScript() splits `script` on newlines and
           # runs each line in its own `sh -c`, so a multi-line inline script
           # breaks (the `if` line parses alone → "expecting fi") and loses
@@ -123,6 +133,15 @@ jobs:
         with:
           name: appium-log
           path: appium.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload logcat
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-logcat
+          path: logcat.log
           if-no-files-found: ignore
           retention-days: 7
 
