@@ -1851,7 +1851,19 @@
   };
 
   const triggerFilePicker = async () => {
-    const files = await pickFiles({ multiple: true });
+    let files: File[] | null;
+    try {
+      files = await pickFiles({ multiple: true });
+    } catch (err) {
+      // The native macOS picker can be unavailable (Tahoe nil-panel). Surface a
+      // clean message instead of an unhandled rejection (the "Fatal (compose)"
+      // overlay), and don't fall through to the HTML <input> — it can SIGABRT
+      // the WKWebView the same way.
+      attachmentError =
+        'Could not open the file picker. This is a known issue on some macOS versions — please try again.';
+      console.error('[compose] file picker failed', err);
+      return;
+    }
     if (files) {
       await processSelectedFiles(files);
       return;
@@ -1860,7 +1872,15 @@
   };
 
   const triggerImagePicker = async () => {
-    const files = await pickFiles({ accept: 'image/*' });
+    let files: File[] | null;
+    try {
+      files = await pickFiles({ accept: 'image/*' });
+    } catch (err) {
+      attachmentError =
+        'Could not open the image picker. This is a known issue on some macOS versions — please try again.';
+      console.error('[compose] image picker failed', err);
+      return;
+    }
     if (files?.[0]) {
       processSelectedImage(files[0]);
       return;

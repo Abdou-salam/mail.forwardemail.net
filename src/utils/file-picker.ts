@@ -23,6 +23,26 @@ const isMacOS =
 export const isMacOSPlatform = isMacOS;
 
 /**
+ * True on macOS 26 "Tahoe" or later — the versions where the bundled plugin
+ * dialog's rfd path can SIGABRT, so we must not fall back to it. The WKWebView
+ * UA is frozen at "10_15_7", so read the real version via plugin-os. Robust to
+ * the product-vs-Darwin ambiguity: Tahoe reports product major 26 but Darwin
+ * major 25, and there is no macOS product 16–25, so `major >= 25` means Tahoe+
+ * either way, while Sequoia (product 15 / Darwin 24) stays below the line. On
+ * any detection failure, assume Tahoe — skipping a maybe-crashing fallback is
+ * the safer default.
+ */
+async function isMacOSTahoeOrLater(): Promise<boolean> {
+  try {
+    const { version } = await import('@tauri-apps/plugin-os');
+    const major = parseInt(String(version()).split('.')[0], 10);
+    return !Number.isFinite(major) || major >= 25;
+  } catch {
+    return true;
+  }
+}
+
+/**
  * Pick files using Tauri's native dialog on desktop.
  * Returns File[] on success, null if cancelled or not on Tauri desktop.
  */
@@ -39,14 +59,30 @@ export async function pickFiles({
 
   let paths: string[];
   if (isMacOS) {
-    // No plugin-dialog fallback here: on Tahoe the plugin's open() goes
-    // through rfd 0.16 → NSOpenPanel::openPanel which can SIGABRT. If our
-    // wrapper genuinely cannot construct the panel, surface the failure
-    // so the user can retry; do not let the plugin call run.
     const { invoke } = await import('@tauri-apps/api/core');
-    const result = await invoke<string[]>('pick_files_macos', { multiple });
-    if (!result || result.length === 0) return null;
-    paths = result;
+    try {
+      const result = await invoke<string[]>('pick_files_macos', { multiple });
+      if (!result || result.length === 0) return null;
+      paths = result;
+    } catch (err) {
+      // pick_files_macos couldn't construct an NSOpenPanel. On macOS < 26 the
+      // bundled plugin dialog is safe and is what actually works there, so fall
+      // back to it — removing this fallback regressed the picker on non-Tahoe
+      // Macs where the custom command returns nil but the plugin succeeds. On
+      // macOS 26 (Tahoe) the plugin's rfd open() can SIGABRT, so do NOT call it
+      // there; surface a typed error the caller handles instead.
+      if (await isMacOSTahoeOrLater()) {
+        const e = new Error('The macOS file picker is unavailable on this system.');
+        (e as Error & { code?: string }).code = 'FILE_PICKER_UNAVAILABLE';
+        (e as Error & { cause?: unknown }).cause = err;
+        throw e;
+      }
+      console.warn('[file-picker] pick_files_macos failed; falling back to plugin dialog:', err);
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const selected = await open({ multiple, filters: buildFilters(accept) });
+      if (!selected) return null;
+      paths = Array.isArray(selected) ? selected : [selected];
+    }
   } else {
     const { open } = await import('@tauri-apps/plugin-dialog');
     const selected = await open({ multiple, filters: buildFilters(accept) });
