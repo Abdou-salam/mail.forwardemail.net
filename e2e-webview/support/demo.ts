@@ -2,7 +2,12 @@ import { currentPath } from './state.js';
 
 export async function activateDemo(browser: WebdriverIO.Browser): Promise<void> {
   const tryDemo = await browser.$('[data-testid="try-demo-btn"]');
-  await tryDemo.waitForExist({ timeout: 15_000 });
+  // 30s, not 15s: on the slowest gating runner (macos-15-intel) the login
+  // screen's cold-start render — especially after a spec's clearStorage +
+  // double openApp reload, with the WebView offscreen ("page has no displayID")
+  // — has intermittently crossed 15s, flaking activateDemo before the app even
+  // painted the button. Same slow-runner headroom as the calendar-nav gate.
+  await tryDemo.waitForExist({ timeout: 30_000 });
 
   // Click via the native DOM rather than WDIO's actionability click.
   // On the macOS-arm64 CI runner the app window spawns very short
@@ -29,11 +34,11 @@ export async function activateDemo(browser: WebdriverIO.Browser): Promise<void> 
   }
 
   await browser.waitUntil(async () => (await currentPath(browser)).startsWith('/mailbox'), {
-    timeout: 15_000,
+    timeout: 30_000,
     timeoutMsg: 'expected navigation to /mailbox after Try Demo',
   });
   const shell = await browser.$('[data-testid="mailbox-shell"]');
-  await shell.waitForDisplayed({ timeout: 15_000 });
+  await shell.waitForDisplayed({ timeout: 30_000 });
 
   // Wait for demo data to actually render — not just the shell. Slower CI
   // runners (Linux Xvfb especially) take noticeably longer to paint the first
