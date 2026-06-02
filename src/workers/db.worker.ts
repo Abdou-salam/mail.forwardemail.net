@@ -84,3 +84,11 @@ self.addEventListener('message', (event: MessageEvent<DbWorkerMessage>) => {
 });
 
 // Do not auto-init; wait for explicit init with dbName override from main thread.
+
+// Boot heartbeat: signal that the worker script has loaded and its message
+// handlers are wired up, BEFORE the (potentially slow) IndexedDB open in
+// `init`. The client uses this to distinguish "worker never started" (fall
+// back to the main-thread engine immediately) from "worker alive but
+// IndexedDB init is slow" (keep waiting). Has no `id`, so the client's
+// request handler ignores it; a dedicated boot listener consumes it.
+self.postMessage({ type: 'booted' });

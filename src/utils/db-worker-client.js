@@ -46,6 +46,14 @@ let useMainThread = false;
 // short-circuited by shouldUseMainThreadDb() before the worker is even created.
 const WORKER_INIT_TIMEOUT_MS = import.meta.env?.DEV ? 30000 : 15000;
 const WORKER_PROBE_TIMEOUT_MS = import.meta.env?.DEV ? 10000 : 6000;
+// How long to wait for the worker's boot heartbeat (it posts {type:'booted'}
+// the moment its script runs, before opening IndexedDB). Hearing it means the
+// worker is alive and any further delay is IndexedDB being slow, so we then
+// allow the full WORKER_INIT_TIMEOUT_MS. NOT hearing it means the worker never
+// started (compile/bundle failure) — fall back fast rather than holding the
+// long init ceiling. Generous in dev because the inline worker bundle is
+// compiled on first use.
+const WORKER_BOOT_TIMEOUT_MS = import.meta.env?.DEV ? 12000 : 5000;
 
 // Determine if we're running in a worker context
 const isWorkerContext =
@@ -237,6 +245,55 @@ async function initMainThread() {
  * the caller then falls back to the main-thread engine.
  */
 async function initViaWorker() {
+  worker = createWorker();
+  worker.onerror = (event) => {
+    console.error('[db-worker-client] Worker error', event);
+  };
+  worker.onmessageerror = (event) => {
+    console.error('[db-worker-client] Worker message error', event);
+  };
+
+  // Boot heartbeat: resolves when the worker posts {type:'booted'} (its script
+  // ran) OR when init itself completes (which also proves it's alive). The boot
+  // message has no `id`, so handleMessage ignores it; this dedicated listener
+  // consumes it.
+  let resolveBooted;
+  const bootedPromise = new Promise((resolve) => {
+    resolveBooted = resolve;
+  });
+  const bootListener = (event) => {
+    if (event?.data?.type === 'booted') resolveBooted();
+  };
+  worker.addEventListener('message', bootListener);
+  worker.onmessage = handleMessage;
+
+  // Send init now; the browser queues it until the worker's handler attaches,
+  // so there's no race with boot. Completing init also satisfies the boot gate.
+  const initSend = send('init', null, { dbName: DB_NAME });
+  initSend.then(resolveBooted, () => {});
+
+  // Phase 1 — the worker must show signs of life within the short boot window.
+  // If it doesn't, it never started; fail fast so the caller falls back to the
+  // main-thread engine immediately instead of holding the long init ceiling.
+  let bootTimeoutId = null;
+  try {
+    await Promise.race([
+      bootedPromise,
+      new Promise((_, reject) => {
+        bootTimeoutId = setTimeout(() => {
+          const err = new Error('Database worker failed to boot');
+          err.code = 'DB_WORKER_NO_BOOT';
+          reject(err);
+        }, WORKER_BOOT_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (bootTimeoutId) clearTimeout(bootTimeoutId);
+    worker.removeEventListener('message', bootListener);
+  }
+
+  // Phase 2 — the worker is alive, so give IndexedDB the full (generous) init
+  // ceiling. Slowness here is IndexedDB opening, not a dead worker.
   let initTimeoutId = null;
   const initTimeoutPromise = new Promise((_, reject) => {
     initTimeoutId = setTimeout(() => {
@@ -245,18 +302,12 @@ async function initViaWorker() {
       reject(err);
     }, WORKER_INIT_TIMEOUT_MS);
   });
-  worker = createWorker();
-  worker.onerror = (event) => {
-    console.error('[db-worker-client] Worker error', event);
-  };
-  worker.onmessageerror = (event) => {
-    console.error('[db-worker-client] Worker message error', event);
-  };
-  worker.onmessage = handleMessage;
-
-  // Wait for db worker to initialize
-  const result = await Promise.race([send('init', null, { dbName: DB_NAME }), initTimeoutPromise]);
-  if (initTimeoutId) clearTimeout(initTimeoutId);
+  let result;
+  try {
+    result = await Promise.race([initSend, initTimeoutPromise]);
+  } finally {
+    if (initTimeoutId) clearTimeout(initTimeoutId);
+  }
   if (result?.success === false) {
     const err = new Error(result?.error || 'Database initialization failed');
     err.code = 'DB_INIT_FAILED';
