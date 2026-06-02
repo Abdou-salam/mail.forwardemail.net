@@ -1,6 +1,7 @@
 import { writable, get } from 'svelte/store';
 import Dexie from 'dexie';
 import { Remote } from '../utils/remote';
+import { hasMorePages } from '../utils/pagination.js';
 import { isDemoMode } from '../utils/demo-mode';
 import { db } from '../utils/db';
 import { Local } from '../utils/storage';
@@ -1015,10 +1016,15 @@ const createMailboxStore = () => {
               const serverTotal = Number.isFinite(folderRec?.totalCount)
                 ? folderRec.totalCount
                 : null;
-              const moreInCache = totalCount > startIdx + limit;
-              const moreOnServer = serverTotal != null && serverTotal > startIdx + limit;
               if ((Local.get('email') || 'default') === account) {
-                hasNextPage.set(moreInCache || moreOnServer);
+                hasNextPage.set(
+                  hasMorePages({
+                    cachedCount: totalCount,
+                    serverTotal,
+                    offset: startIdx,
+                    limit,
+                  }),
+                );
               }
             } catch {
               // ignore count failures
