@@ -56,14 +56,76 @@ function recordAuthFailure() {
   }
 }
 
+// ── Global request circuit breaker ───────────────────────────────────
+// Under a degraded environment (e.g. a struggling WKWebView whose db worker
+// fell back to the main thread) reads time out, the retry layer multiplies
+// each into more attempts, and the backend gets hammered. After a burst of
+// transient failures (timeouts / 5xx / 429) we open a breaker and fail GETs
+// fast for a short cooldown so the client stops piling on. Mutations
+// (POST/PUT/DELETE) bypass it — they're low-volume and user-initiated — as
+// does any caller that passes { bypassCircuit: true }. A 429's Retry-After,
+// when present, sets the cooldown directly so we honor the backend's own
+// backpressure instead of fighting it.
+const CIRCUIT_FAILURE_THRESHOLD = 5;
+const CIRCUIT_COOLDOWN_MS = 8000;
+const CIRCUIT_MAX_COOLDOWN_MS = 60_000;
+let _transientFailures = 0;
+let _circuitOpenUntil = 0;
+
+function isCircuitOpen() {
+  return Date.now() < _circuitOpenUntil;
+}
+
+function openCircuit(ms = CIRCUIT_COOLDOWN_MS) {
+  _circuitOpenUntil = Date.now() + Math.min(ms, CIRCUIT_MAX_COOLDOWN_MS);
+  _transientFailures = 0;
+}
+
+function recordTransientSuccess() {
+  _transientFailures = 0;
+}
+
+// retryAfterMs > 0 (from a 429 Retry-After header) opens the breaker
+// immediately; otherwise we only open it once a burst crosses the threshold.
+function recordTransientFailure(retryAfterMs = 0) {
+  if (retryAfterMs > 0) {
+    openCircuit(retryAfterMs);
+    return;
+  }
+  _transientFailures++;
+  if (_transientFailures >= CIRCUIT_FAILURE_THRESHOLD) {
+    openCircuit();
+  }
+}
+
+// Parse a Retry-After header (delta-seconds or HTTP-date) into ms. Returns 0
+// when absent/unparseable so the caller falls back to the threshold logic.
+function parseRetryAfterMs(response) {
+  try {
+    const raw = response?.headers?.get?.('retry-after');
+    if (!raw) return 0;
+    const secs = Number(raw);
+    if (Number.isFinite(secs)) return Math.max(0, secs * 1000);
+    const when = Date.parse(raw);
+    return Number.isFinite(when) ? Math.max(0, when - Date.now()) : 0;
+  } catch {
+    return 0;
+  }
+}
+
 // Create base ky instance with default configuration
 const api = ky.create({
   prefixUrl: config.apiBase,
   timeout: 30000, // 30 second timeout (default, overridden per-action)
   retry: {
-    limit: 3,
-    methods: ['get', 'post', 'put', 'delete'],
-    statusCodes: [0, 408, 429, 500, 502, 503, 504],
+    // Keep retries modest: a degraded WKWebView times every request out and
+    // each retry multiplies backend load. Two retries max, idempotent methods
+    // only (never re-send a POST on timeout — risk of a duplicate create), and
+    // 429 is intentionally NOT here — retrying a rate-limit fights the backend;
+    // the circuit breaker honors it (via Retry-After) instead.
+    limit: 2,
+    methods: ['get', 'head', 'put', 'delete'],
+    statusCodes: [0, 408, 500, 502, 503, 504],
     backoffLimit: 5000,
     delay: (attemptCount) => addJitter(Math.min(1000 * Math.pow(2, attemptCount - 1), 5000)),
   },
@@ -93,6 +155,15 @@ export const Remote = {
     const { path, method: defaultMethod } = this.getEndpoint(action);
     const method = (options.method || defaultMethod || 'GET').toLowerCase();
     const { signal } = options;
+
+    // Circuit breaker: when tripped, fail GETs fast instead of adding to the
+    // storm. Mutations and explicit { bypassCircuit } callers go through.
+    if (method === 'get' && !options.bypassCircuit && isCircuitOpen()) {
+      const err = new Error('Backing off — service temporarily unavailable');
+      err.status = 503;
+      err.circuitOpen = true;
+      throw err;
+    }
     const perfLabel = options.perfLabel || action;
     const perfStart = performance?.now ? performance.now() : null;
 
@@ -181,8 +252,10 @@ export const Remote = {
     try {
       const response = await api(urlPath, kyOptions);
 
-      // Successful response — reset consecutive auth failure counter
+      // Successful response — reset consecutive auth failure counter and
+      // close the circuit breaker.
       recordAuthSuccess();
+      recordTransientSuccess();
 
       // Allow callers to explicitly request text (e.g. raw RFC822 EML downloads)
       if (options.responseAs === 'text') {
@@ -217,6 +290,14 @@ export const Remote = {
           recordAuthFailure();
         }
 
+        // Feed the circuit breaker: 429 (honor Retry-After) and 5xx mean the
+        // backend is rate-limiting or struggling — back off rather than pile on.
+        if (err.status === 429) {
+          recordTransientFailure(parseRetryAfterMs(error.response));
+        } else if (err.status >= 500) {
+          recordTransientFailure();
+        }
+
         // Try to get error details from response
         try {
           const errorData = await error.response.json();
@@ -231,13 +312,16 @@ export const Remote = {
 
         throw err;
       } else if (error.name === 'TimeoutError') {
-        // Timeout error
+        // Timeout error — counts toward the circuit breaker (a degraded env
+        // times everything out; backing off is what protects the backend).
+        recordTransientFailure();
         const err = new Error('Request timeout');
         err.status = 408;
         logApiError(action, method.toUpperCase(), 408, err);
         throw err;
       } else {
         // Network error or other error (no status code)
+        recordTransientFailure();
         logApiError(action, method.toUpperCase(), 0, error);
         throw error;
       }
