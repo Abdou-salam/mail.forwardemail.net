@@ -33,6 +33,20 @@ let initPromise = null;
 // thread instead of postMessaging the (terminated) worker.
 let useMainThread = false;
 
+// The worker init + IndexedDB probe race against setTimeout() deadlines that
+// run on the MAIN thread — the most contended resource during startup. On a
+// cold dev load (the inline worker bundle is compiled on first use) or a slow
+// x64 Mac, a perfectly healthy worker can miss a tight deadline, get torn down,
+// and force the entire app onto the main-thread DB engine. That engine then
+// runs every cached read on the main thread and starves the startup API
+// fetches (Folders/Calendars/Messages time out even though the server is fast).
+// Keep these generous: the UI boot is already decoupled via a 4s ceiling in
+// main.ts, so a longer ceiling here only delays *declaring the worker dead*,
+// never the UI. A genuine WebKitGTK/Linux stall never reaches here — it's
+// short-circuited by shouldUseMainThreadDb() before the worker is even created.
+const WORKER_INIT_TIMEOUT_MS = import.meta.env?.DEV ? 30000 : 15000;
+const WORKER_PROBE_TIMEOUT_MS = import.meta.env?.DEV ? 10000 : 6000;
+
 // Determine if we're running in a worker context
 const isWorkerContext =
   typeof globalThis.WorkerGlobalScope !== 'undefined' &&
@@ -62,6 +76,15 @@ async function send(action, table = null, payload = {}) {
   if (!messagePort && !worker) {
     if (!isWorkerContext && action !== 'init') {
       await initDbClient();
+      // initDbClient() may have committed to the main-thread engine (the
+      // worker's IndexedDB init/probe timed out and the worker was torn down).
+      // In that window worker AND messagePort are both null, so without this
+      // re-check a caller that entered send() before useMainThread flipped —
+      // e.g. the outbox processor firing on startup — falls through to
+      // attemptSend() and rejects with "Database worker not initialized".
+      if (useMainThread) {
+        return executeOperation({ action, table, payload: payload || {} });
+      }
     }
   }
 
@@ -220,7 +243,7 @@ async function initViaWorker() {
       const err = new Error('Database worker init timeout');
       err.code = 'DB_WORKER_INIT_TIMEOUT';
       reject(err);
-    }, 10000); // Increased timeout for dev mode
+    }, WORKER_INIT_TIMEOUT_MS);
   });
   worker = createWorker();
   worker.onerror = (event) => {
@@ -242,14 +265,15 @@ async function initViaWorker() {
 
   // init() can succeed yet later IndexedDB ops still stall under WebKitGTK, so
   // confirm the worker can round-trip a real write/read/delete before we commit
-  // to it. On a healthy worker this resolves in well under the 3s ceiling.
+  // to it. On a healthy worker this resolves in well under the probe ceiling.
   await probeWorkerIndexedDb();
   return result;
 }
 
 /**
  * Write/read/delete a throwaway `meta` record through the worker. Rejects on
- * mismatch or if the round-trip exceeds 3s (i.e. the worker's IndexedDB hangs).
+ * mismatch or if the round-trip exceeds WORKER_PROBE_TIMEOUT_MS (i.e. the
+ * worker's IndexedDB hangs).
  */
 async function probeWorkerIndexedDb() {
   const PROBE_KEY = '__db_worker_probe__';
@@ -259,7 +283,7 @@ async function probeWorkerIndexedDb() {
       const err = new Error('Database worker IndexedDB probe timed out');
       err.code = 'DB_WORKER_PROBE_TIMEOUT';
       reject(err);
-    }, 3000);
+    }, WORKER_PROBE_TIMEOUT_MS);
   });
   const probeOps = (async () => {
     await send('put', 'meta', { record: { key: PROBE_KEY, updatedAt: Date.now() } });

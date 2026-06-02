@@ -1855,9 +1855,10 @@ async function bootstrap() {
     // The local database is a CACHE, not a boot dependency. Don't let a slow or
     // hung db init block the rest of bootstrap — in particular `_bootstrapComplete`
     // (which gates lazily mounting Calendar/Contacts) and markAppReady(). Two
-    // real cases stall it: the db worker can take ~10s to time out under CI/cold
-    // load before falling back to the main thread (seen on macOS too, not just
-    // Linux), and WebKitGTK can stall IndexedDB indefinitely. Either way the UI
+    // real cases stall it: the db worker can take many seconds to time out under
+    // CI/cold load before falling back to the main thread (seen on macOS too, not
+    // just Linux — see WORKER_INIT_TIMEOUT_MS in db-worker-client), and WebKitGTK
+    // can stall IndexedDB indefinitely. Either way the UI
     // must still boot. Race the init against a short ceiling; if the real init
     // resolves later the cache simply attaches then, and the read/write paths
     // already tolerate a not-yet-ready cache (they fall through to the network /

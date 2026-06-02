@@ -33,7 +33,7 @@
     "format:fix": "prettier . --write",
     "prepare": "husky install",
     "prerelease": "bash scripts/prerelease.sh",
-    "release": "npm_config_ignore_scripts=false np --no-cleanup",
+    "release": "npm_config_ignore_scripts=false np --no-cleanup --no-release-draft",
     "release:desktop": "bash scripts/release-desktop.sh",
     "tauri:check-cache": "bash scripts/check-cargo-cache.sh",
     "tauri:sync-version": "node scripts/sync-version.cjs",
