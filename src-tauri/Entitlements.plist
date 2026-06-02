@@ -2,15 +2,21 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <!-- Hardened Runtime: required for notarization -->
-  <key>com.apple.security.app-sandbox</key>
-  <true/>
+  <!-- NOT sandboxed, on purpose. This app ships via Developer ID + notarization
+       (not the Mac App Store), so App Sandbox is not required — and it BREAKS
+       the native file picker: a sandboxed app brokers NSOpenPanel through
+       Powerbox, which returns nil here and SIGABRTs the rfd file dialog
+       (objc2 retain_semantics::none_fail). Notarization needs the HARDENED
+       RUNTIME (the cs.* entitlements below + `codesign --options runtime`),
+       which is a different thing from the sandbox. `com.apple.security.app-sandbox`
+       was removed for this reason — do not re-add it (added 00460d8 by mistake,
+       conflating sandbox with hardened runtime). -->
 
   <!-- Network access for API and WebSocket connections -->
   <key>com.apple.security.network.client</key>
   <true/>
 
-  <!-- Allow loading the WKWebView (required by Tauri) -->
+  <!-- Hardened Runtime: allow the WKWebView / WebKit JIT (required by Tauri) -->
   <key>com.apple.security.cs.allow-jit</key>
   <true/>
 
