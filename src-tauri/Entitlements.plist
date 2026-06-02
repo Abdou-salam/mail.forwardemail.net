@@ -2,15 +2,14 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <!-- NOT sandboxed, on purpose. This app ships via Developer ID + notarization
-       (not the Mac App Store), so App Sandbox is not required — and it BREAKS
-       the native file picker: a sandboxed app brokers NSOpenPanel through
-       Powerbox, which returns nil here and SIGABRTs the rfd file dialog
-       (objc2 retain_semantics::none_fail). Notarization needs the HARDENED
-       RUNTIME (the cs.* entitlements below + `codesign --options runtime`),
-       which is a different thing from the sandbox. `com.apple.security.app-sandbox`
-       was removed for this reason — do not re-add it (added 00460d8 by mistake,
-       conflating sandbox with hardened runtime). -->
+  <!-- Do NOT add com.apple.security.app-sandbox here. A sandboxed app brokers
+       NSOpenPanel through Powerbox, which returns nil and SIGABRTs the file
+       picker in signed builds. Notarization needs the Hardened Runtime (the
+       cs.* entitlements below), which is separate from the sandbox. It was
+       added in 00460d8 by mistake and removed 2026-06-02. See
+       docs/desktop-postmortem-macos-sandbox-filepicker-2026-06-02.md
+       NOTE: keep this file pure ASCII with no double hyphen inside comments;
+       Apple AMFIUnserializeXML (codesign) rejects both, unlike plutil. -->
 
   <!-- Network access for API and WebSocket connections -->
   <key>com.apple.security.network.client</key>

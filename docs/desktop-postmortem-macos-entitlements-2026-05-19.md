@@ -177,7 +177,7 @@ After the fix, `codesign -d --entitlements - "Forward Email.app"` on a downloade
 
    > **Upgrading from 0.10.17–0.10.21?** Run `mdfind 'kMDItemCFBundleIdentifier == "net.forwardemail.mail"'` in Terminal and delete any results outside `/Applications` before installing 0.10.22.
 
-5. **Document the entitlement gotcha** in `docs/desktop-build-ci.md` so the next person adding push / keychain / network entitlements knows to think about both targets.
+5. **Document the entitlement gotcha** in `docs/desktop-build-ci.md` so the next person adding push / keychain / network entitlements knows to think about both targets. ✅ Done (see its "macOS Entitlements" section). It then happened **again** on 2026-06-02 — `com.apple.security.app-sandbox` broke the file picker the same invisible-until-signed way: [Postmortem: macOS File Picker Crash](./desktop-postmortem-macos-sandbox-filepicker-2026-06-02.md). Strongly consider splitting the shared iOS/macOS entitlements file.
 
 ### Lower-priority / defer
 

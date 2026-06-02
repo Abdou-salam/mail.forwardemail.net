@@ -36,3 +36,17 @@ After the workflow completes:
 ## Manual Runs
 
 To trigger the workflow manually, use the **Actions** tab, choose **Release Desktop (Tauri)**, and provide a tag such as `desktop-v0.7.0`.
+
+## ⚠️ macOS Entitlements — read before touching `src-tauri/Entitlements.plist`
+
+`bundle.macOS.entitlements` in `tauri.conf.json` points at `src-tauri/Entitlements.plist`, and that **same file is also used for iOS** (via `scripts/inject-ios-signing.cjs`). Entitlements baked into the macOS bundle have bitten us **twice**, and both bugs share two nasty properties: they are **invisible in `tauri:dev` / local builds** (they only manifest in a **signed + notarized** bundle), and CI reports every step green (the failure is at _exec_ time in the kernel, not at build/sign/notary time).
+
+Hard rules:
+
+1. **App Sandbox ≠ Hardened Runtime.** Notarization needs the **Hardened Runtime** (`com.apple.security.cs.allow-jit`, `com.apple.security.cs.allow-unsigned-executable-memory`, + `codesign --options runtime`). It does **not** need `com.apple.security.app-sandbox`. Do **not** add `app-sandbox` to this Developer-ID app "for hardening" — a sandboxed app brokers `NSOpenPanel` through Powerbox and (without `files.user-selected.*`) returns nil → the `rfd` file dialog SIGABRTs. See [Postmortem: macOS File Picker Crash](./desktop-postmortem-macos-sandbox-filepicker-2026-06-02.md).
+2. **Don't add entitlements the macOS Developer ID cert isn't authorized for.** `aps-environment` (APNs) is iOS-only and made every macOS build unlaunchable (`CODESIGNING Invalid Signature` at exec). It's injected for iOS at build time and must stay absent for macOS. See [Postmortem: macOS Releases Unopenable](./desktop-postmortem-macos-entitlements-2026-05-19.md).
+3. **Always validate entitlement changes on a real signed + notarized build**, not `tauri dev`. Smoke-test anything gated by the sandbox/signature: file open/save dialogs, push, keychain, protected resources.
+4. Inspect what actually shipped: `codesign -d --entitlements - "/Applications/Forward Email.app"`.
+5. **Keep `Entitlements.plist` pure ASCII with no `--` (double hyphen) inside comments.** Apple's entitlements parser (`AMFIUnserializeXML`, used by `codesign`) is stricter than `plutil` and fails with `syntax error near line N` / `failed to sign app` on non-ASCII (e.g. em-dashes) or a `--` in a comment — even though `plutil -lint` reports OK. (Bit us 2026-06-02 when a comment mentioned `codesign --options`.)
+
+Systemic fix still open: **split macOS and iOS entitlements into separate files** so an iOS-relevant or "hardening" entitlement can't silently bake into the macOS bundle.
