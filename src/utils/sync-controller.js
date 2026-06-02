@@ -10,6 +10,7 @@ import {
 } from './sync-worker-client.js';
 import { warn } from './logger.ts';
 import { getPendingDeleteIds } from '../stores/mailboxStore';
+import { nextBackfillDecision } from '../workers/sync-pure.ts';
 
 let searchPortConnected = false;
 
@@ -48,6 +49,9 @@ export const syncSummary = derived([status, progressMap], ([$status, $progress])
 let queue = [];
 let inFlight = false;
 let currentAccount = null;
+// Consecutive zero-progress backfill batches seen — used to cap the backfill
+// re-queue loop (see nextBackfillDecision). Reset on progress, done, or error.
+let backfillNoProgressStreak = 0;
 const queuedKeys = new Set();
 const buildQueueKey = (task) => `${task.type}:${task.folder}`;
 const pushTask = (task) => {
@@ -151,12 +155,17 @@ async function runTask(task) {
       // Backfill is best-effort. On error, don't loop — let the next
       // metadata sync (folder switch, manual refresh) re-trigger it.
       warn('[sync-controller] backfill task failed', err);
+      backfillNoProgressStreak = 0;
       return;
     }
-    // Re-queue the next batch unless the worker says we're done. The
-    // append (pushTask) ensures any user-triggered work that came in
-    // during this batch runs first.
-    if (result && !result.done) {
+    // Re-queue the next batch only while the worker reports !done AND batches
+    // keep making progress. nextBackfillDecision caps consecutive zero-page
+    // batches so a misbehaving worker can't spin the queue forever. The append
+    // (pushTask) ensures any user-triggered work queued during this batch runs
+    // first.
+    const decision = nextBackfillDecision(result, backfillNoProgressStreak);
+    backfillNoProgressStreak = decision.noProgressStreak;
+    if (decision.requeue) {
       pushTask({
         type: 'backfill',
         folder: task.folder,

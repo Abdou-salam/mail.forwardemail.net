@@ -29,6 +29,7 @@ import {
   parseResultList,
   isPgpContent,
   worklistFromHeaders,
+  backfillBatchDone,
 } from './sync-pure.ts';
 
 // ============================================================================
@@ -562,13 +563,11 @@ async function runBackfillTask(task, postProgress) {
   }
   await updateManifest(account, folder, nextManifest);
 
-  // `pagesThisRun === 0` means the first fetch of this batch threw (network/
-  // auth blip) before any page was processed. Report `done` so the controller
-  // stops re-queuing instead of spinning in a tight, no-progress loop; the next
-  // metadata sync (folder switch / refresh) re-triggers backfill from the saved
-  // page. Only a batch that actually made progress asks to continue.
+  // backfillBatchDone: a zero-page batch (first fetch threw before the network)
+  // reports done so the controller stops re-queuing instead of spinning a tight,
+  // no-progress loop; the next metadata sync resumes from the saved page.
   return {
-    done: exhausted || pagesThisRun === 0,
+    done: backfillBatchDone({ exhausted, pagesProcessed: pagesThisRun }),
     inserted: totalInsertedThisRun,
     page,
     pagesProcessed: pagesThisRun,

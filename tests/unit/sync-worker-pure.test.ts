@@ -10,6 +10,9 @@ import {
   parseResultList,
   isPgpContent,
   worklistFromHeaders,
+  backfillBatchDone,
+  nextBackfillDecision,
+  BACKFILL_NO_PROGRESS_CAP,
 } from '../../src/workers/sync-pure.ts';
 
 describe('sync worker pure helpers', () => {
@@ -188,6 +191,81 @@ describe('sync worker pure helpers', () => {
       const headers = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
       const bodies = [null, null, null];
       expect(worklistFromHeaders(headers, bodies, 2)).toEqual([{ id: 'a' }, { id: 'b' }]);
+    });
+  });
+
+  describe('backfillBatchDone', () => {
+    it('is done when history is exhausted', () => {
+      expect(backfillBatchDone({ exhausted: true, pagesProcessed: 5 })).toBe(true);
+    });
+
+    it('is done when zero pages were processed (first fetch threw → would loop)', () => {
+      // The regression: a pre-network throw left pagesProcessed at 0 and
+      // exhausted false, and the old code returned done:false → infinite,
+      // network-less re-queue ("Syncing INBOX" forever).
+      expect(backfillBatchDone({ exhausted: false, pagesProcessed: 0 })).toBe(true);
+    });
+
+    it('keeps going when a batch made progress and is not exhausted', () => {
+      expect(backfillBatchDone({ exhausted: false, pagesProcessed: 3 })).toBe(false);
+    });
+
+    it('treats missing fields as a zero-progress (done) batch', () => {
+      expect(backfillBatchDone()).toBe(true);
+      expect(backfillBatchDone({})).toBe(true);
+    });
+  });
+
+  describe('nextBackfillDecision', () => {
+    it('does not re-queue when the worker reports done', () => {
+      expect(nextBackfillDecision({ done: true, pagesProcessed: 0 }, 2)).toEqual({
+        requeue: false,
+        noProgressStreak: 0,
+      });
+    });
+
+    it('does not re-queue on a null/undefined result', () => {
+      expect(nextBackfillDecision(null, 0)).toEqual({ requeue: false, noProgressStreak: 0 });
+      expect(nextBackfillDecision(undefined, 1)).toEqual({ requeue: false, noProgressStreak: 0 });
+    });
+
+    it('re-queues and resets the streak when a batch made progress', () => {
+      expect(nextBackfillDecision({ done: false, pagesProcessed: 4 }, 2)).toEqual({
+        requeue: true,
+        noProgressStreak: 0,
+      });
+    });
+
+    it('re-queues but counts consecutive zero-page batches', () => {
+      expect(nextBackfillDecision({ done: false, pagesProcessed: 0 }, 0)).toEqual({
+        requeue: true,
+        noProgressStreak: 1,
+      });
+      expect(nextBackfillDecision({ done: false, pagesProcessed: 0 }, 1)).toEqual({
+        requeue: true,
+        noProgressStreak: 2,
+      });
+    });
+
+    it('stops re-queuing once the no-progress streak hits the cap', () => {
+      const atCap = nextBackfillDecision(
+        { done: false, pagesProcessed: 0 },
+        BACKFILL_NO_PROGRESS_CAP - 1,
+      );
+      expect(atCap.requeue).toBe(false);
+      expect(atCap.noProgressStreak).toBe(0);
+    });
+
+    it('a worker stuck on {done:false, pagesProcessed:0} terminates within the cap', () => {
+      // Simulate the controller loop against a misbehaving worker; it must stop.
+      let streak = 0;
+      let iterations = 0;
+      for (; iterations < 50; iterations++) {
+        const d = nextBackfillDecision({ done: false, pagesProcessed: 0 }, streak);
+        streak = d.noProgressStreak;
+        if (!d.requeue) break;
+      }
+      expect(iterations).toBeLessThan(BACKFILL_NO_PROGRESS_CAP);
     });
   });
 });

@@ -154,3 +154,48 @@ export function worklistFromHeaders<H extends HeaderLike>(
   });
   return worklist;
 }
+
+// ── Backfill loop control ──────────────────────────────────────────────────
+// The historical-message backfill is a self-re-queuing loop: the worker runs a
+// batch and the controller enqueues the next one until the worker says it's
+// done. These two pure helpers own the "should we keep going?" decision on each
+// side so the loop can always terminate (and so it's unit-testable).
+
+/** Consecutive zero-progress backfill batches the controller will re-queue
+ *  before giving up — defence-in-depth against a worker that keeps returning
+ *  `{ done: false }` without making progress. */
+export const BACKFILL_NO_PROGRESS_CAP = 3;
+
+/**
+ * Whether a backfill batch should report itself "done" so the controller stops
+ * re-queuing it. A batch that processed zero pages made no progress — its first
+ * fetch threw before the network (unconfigured worker / auth / blip) — so
+ * re-queuing would just spin a tight, network-less loop. Report done and let the
+ * next metadata sync resume from the saved page. A batch is also done once
+ * forward+backfill history is exhausted.
+ */
+export function backfillBatchDone({
+  exhausted = false,
+  pagesProcessed = 0,
+}: { exhausted?: boolean; pagesProcessed?: number } = {}): boolean {
+  return Boolean(exhausted) || pagesProcessed === 0;
+}
+
+/**
+ * Controller-side decision for the next backfill batch. Re-queues only while the
+ * worker reports `!done` AND batches keep processing pages; caps consecutive
+ * zero-page batches so a worker that wrongly returns `{ done: false }` can't spin
+ * the queue forever. NOTE progress is measured by `pagesProcessed`, not
+ * `inserted`: a batch can legitimately walk through already-cached pages
+ * (inserted: 0) while still moving toward older uncached history.
+ */
+export function nextBackfillDecision(
+  result: { done?: boolean; pagesProcessed?: number } | null | undefined,
+  noProgressStreak = 0,
+): { requeue: boolean; noProgressStreak: number } {
+  if (!result || result.done) return { requeue: false, noProgressStreak: 0 };
+  if ((result.pagesProcessed || 0) > 0) return { requeue: true, noProgressStreak: 0 };
+  const streak = noProgressStreak + 1;
+  if (streak >= BACKFILL_NO_PROGRESS_CAP) return { requeue: false, noProgressStreak: 0 };
+  return { requeue: true, noProgressStreak: streak };
+}
