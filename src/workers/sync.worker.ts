@@ -451,6 +451,15 @@ async function runBackfillTask(task, postProgress) {
   const folder = task.folder;
   if (!account || !folder) return { done: true, reason: 'invalid_task' };
 
+  // Without API config there's nothing to fetch. Bail as "done" rather than
+  // letting fetchMessageList throw on `new URL('')` below: the caller treats a
+  // thrown/zero-progress batch as transient and re-queues, so an unconfigured
+  // worker (e.g. a backfill that runs before the init message lands, common in
+  // dev) would spin "Syncing <folder>" forever with no network activity.
+  if (!apiBase || !authHeader) {
+    return { done: true, reason: 'not_configured' };
+  }
+
   let manifest = await getManifest(account, folder);
   if (manifest.backfillComplete) {
     return { done: true, reason: 'already_complete' };
@@ -553,8 +562,13 @@ async function runBackfillTask(task, postProgress) {
   }
   await updateManifest(account, folder, nextManifest);
 
+  // `pagesThisRun === 0` means the first fetch of this batch threw (network/
+  // auth blip) before any page was processed. Report `done` so the controller
+  // stops re-queuing instead of spinning in a tight, no-progress loop; the next
+  // metadata sync (folder switch / refresh) re-triggers backfill from the saved
+  // page. Only a batch that actually made progress asks to continue.
   return {
-    done: exhausted,
+    done: exhausted || pagesThisRun === 0,
     inserted: totalInsertedThisRun,
     page,
     pagesProcessed: pagesThisRun,
