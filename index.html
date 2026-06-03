@@ -130,6 +130,19 @@
             /no such element/i.test(msg)
           );
         }
+        // CSP violations whose source or blocked URI is a browser
+        // extension (password managers, privacy tools) are outside the
+        // app's control and don't reflect a fault in our own scripts —
+        // many extensions inject code that calls eval(), which our
+        // script-src blocks. Surfacing those as a fatal overlay hides
+        // the working app behind a scary panel. Ignore them; the
+        // console.error above still records them for support.
+        function isExtensionViolation(e) {
+          if (!e) return false;
+          var re =
+            /^(moz-extension|chrome-extension|safari-web-extension|safari-extension|webkit-masked-url|extension):/i;
+          return re.test(String(e.sourceFile || '')) || re.test(String(e.blockedURI || ''));
+        }
         function showFatal(detail) {
           if (isTestHarnessNoise(detail)) return;
           if (SHOWN) {
@@ -228,6 +241,7 @@
           try {
             console.error('[fe-fatal][csp]', e);
           } catch (_) {}
+          if (isExtensionViolation(e)) return;
           var detail = [
             'CSP violation',
             'directive: ' + e.violatedDirective,

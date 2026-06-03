@@ -19,6 +19,15 @@
       // graph risks as the main window).
       (function () {
         var SHOWN = false;
+        // See index.html: CSP violations originating from browser
+        // extensions (they often inject eval()) are outside the app's
+        // control and must not trigger the fatal overlay.
+        function isExtensionViolation(e) {
+          if (!e) return false;
+          var re =
+            /^(moz-extension|chrome-extension|safari-web-extension|safari-extension|webkit-masked-url|extension):/i;
+          return re.test(String(e.sourceFile || '')) || re.test(String(e.blockedURI || ''));
+        }
         function showFatal(detail) {
           if (SHOWN) {
             var prev = document.getElementById('fe-fatal-error');
@@ -97,6 +106,7 @@
           try {
             console.error('[fe-fatal][compose][csp]', e);
           } catch (_) {}
+          if (isExtensionViolation(e)) return;
           showFatal(
             [
               'CSP violation',
