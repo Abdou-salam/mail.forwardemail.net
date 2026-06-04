@@ -1,11 +1,20 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   isValidDexieKeyFallback,
   coerceLabelList,
   hasFromValue,
   getMessageKey,
   mergeMessagePages,
+  mergeMissingLabels,
+  mergeMissingFrom,
 } from '../../src/stores/mailbox-store-helpers';
+
+// Mock bulkGet: returns the cached record for each [account, key] tuple in the
+// same order as the keys (Dexie's bulkGet contract), undefined when absent.
+const mockBulkGet = (records: Record<string, unknown>) =>
+  vi.fn((keys: unknown[]) =>
+    Promise.resolve((keys as [string, string][]).map(([, key]) => records[key])),
+  );
 
 describe('isValidDexieKeyFallback', () => {
   it('accepts strings, finite numbers, and Dates', () => {
@@ -135,5 +144,88 @@ describe('mergeMessagePages', () => {
     expect(mergeMessagePages()).toEqual([]);
     expect(mergeMessagePages([], [])).toEqual([]);
     expect(mergeMessagePages([{ id: 'a' }])).toEqual([{ id: 'a' }]);
+  });
+});
+
+describe('mergeMissingLabels', () => {
+  it('does not hit the cache when every message has trusted labels', async () => {
+    const bulkGet = mockBulkGet({});
+    const list = [{ id: '1', labels: ['a'] }];
+    const out = await mergeMissingLabels(bulkGet, 'acct', list, [true]);
+    expect(out).toBe(list); // unchanged, same reference
+    expect(bulkGet).not.toHaveBeenCalled();
+  });
+
+  it('backfills labels from the cached record (keyed by [account, id])', async () => {
+    const bulkGet = mockBulkGet({ '1': { labels: ['work', 'home'] } });
+    const out = await mergeMissingLabels(bulkGet, 'acct', [{ id: '1' }], [false]);
+    expect(out).toEqual([{ id: '1', labels: ['work', 'home'] }]);
+    expect(bulkGet).toHaveBeenCalledWith([['acct', '1']]);
+  });
+
+  it('falls back to an alternate identifier (uid) when the id record has no labels', async () => {
+    const bulkGet = mockBulkGet({ '1': { labels: [] }, U1: { labels: ['fromUid'] } });
+    const out = await mergeMissingLabels(bulkGet, 'acct', [{ id: '1', uid: 'U1' }], [false]);
+    expect(out).toEqual([{ id: '1', uid: 'U1', labels: ['fromUid'] }]);
+  });
+
+  it('treats a falsy labelPresence as "incoming labels not authoritative" and prefers the cache', async () => {
+    // labelPresence omitted -> [] -> every entry looked up; cache labels win.
+    const bulkGet = mockBulkGet({ '1': { labels: ['cached'] } });
+    const out = await mergeMissingLabels(bulkGet, 'acct', [{ id: '1', labels: ['incoming'] }]);
+    expect(out).toEqual([{ id: '1', labels: ['cached'] }]);
+  });
+
+  it('leaves the message untouched when the cache has nothing useful', async () => {
+    const bulkGet = mockBulkGet({}); // record undefined
+    const out = await mergeMissingLabels(bulkGet, 'acct', [{ id: '1' }], [false]);
+    expect(out).toEqual([{ id: '1' }]);
+  });
+
+  it('returns the original list on a bulkGet error', async () => {
+    const bulkGet = vi.fn(() => Promise.reject(new Error('db dead')));
+    const list = [{ id: '1' }];
+    const out = await mergeMissingLabels(bulkGet, 'acct', list, [false]);
+    expect(out).toBe(list);
+  });
+
+  it('only looks up the messages that are missing/untrusted labels', async () => {
+    const bulkGet = mockBulkGet({ '2': { labels: ['x'] } });
+    const list = [{ id: '1', labels: ['a'] }, { id: '2' }];
+    const out = await mergeMissingLabels(bulkGet, 'acct', list, [true, false]);
+    expect(out).toEqual([
+      { id: '1', labels: ['a'] },
+      { id: '2', labels: ['x'] },
+    ]);
+    expect(bulkGet).toHaveBeenCalledWith([['acct', '2']]); // not id '1'
+  });
+});
+
+describe('mergeMissingFrom', () => {
+  it('does not hit the cache when every message has a from', async () => {
+    const bulkGet = mockBulkGet({});
+    const list = [{ id: '1', from: 'a@b.com' }];
+    const out = await mergeMissingFrom(bulkGet, 'acct', list);
+    expect(out).toBe(list);
+    expect(bulkGet).not.toHaveBeenCalled();
+  });
+
+  it('backfills from from the cached record', async () => {
+    const bulkGet = mockBulkGet({ '1': { from: 'alice@x.com' } });
+    const out = await mergeMissingFrom(bulkGet, 'acct', [{ id: '1', from: '' }]);
+    expect(out).toEqual([{ id: '1', from: 'alice@x.com' }]);
+  });
+
+  it('falls back to an alternate identifier when the id record has no from', async () => {
+    const bulkGet = mockBulkGet({ '1': { from: '   ' }, M1: { from: 'bob@x.com' } });
+    const out = await mergeMissingFrom(bulkGet, 'acct', [{ id: '1', message_id: 'M1' }]);
+    expect(out).toEqual([{ id: '1', message_id: 'M1', from: 'bob@x.com' }]);
+  });
+
+  it('returns the original list on a bulkGet error', async () => {
+    const bulkGet = vi.fn(() => Promise.reject(new Error('db dead')));
+    const list = [{ id: '1', from: '' }];
+    const out = await mergeMissingFrom(bulkGet, 'acct', list);
+    expect(out).toBe(list);
   });
 });

@@ -69,8 +69,9 @@ import { getAuthHeader } from '../utils/auth';
 import {
   isValidDexieKeyFallback,
   coerceLabelList,
-  hasFromValue,
   mergeMessagePages,
+  mergeMissingLabels,
+  mergeMissingFrom,
 } from './mailbox-store-helpers';
 import { createPendingDeleteTracker, createPendingFlagTracker } from './optimistic-trackers';
 
@@ -107,112 +108,9 @@ const invalidateFolderInMemCache = (account, folder) => {
 
 const isMobileViewport = () => typeof window !== 'undefined' && window.innerWidth <= 900;
 
-const mergeMissingLabels = async (account, list, labelPresence = []) => {
-  try {
-    const lookup = [];
-    const indices = [];
-    const fallbackKeys = [];
-    const fallbackIndex = new Map();
-    list.forEach((msg, idx) => {
-      const incoming = coerceLabelList(msg.labels);
-      if (!labelPresence[idx] || incoming.length === 0) {
-        lookup.push([account, msg.id]);
-        indices.push(idx);
-      }
-    });
-    if (!lookup.length) return list;
-    const existing = await db.messages.bulkGet(lookup);
-    indices.forEach((msgIdx) => {
-      const msg = list[msgIdx] || {};
-      const id = msg?.id;
-      const candidates = [msg?.uid, msg?.message_id, msg?.header_message_id].filter(Boolean);
-      for (const candidate of candidates) {
-        if (candidate === id) continue;
-        fallbackIndex.set(`${msgIdx}:${candidate}`, fallbackKeys.length);
-        fallbackKeys.push([account, candidate]);
-      }
-    });
-    const fallbackRecords = fallbackKeys.length ? await db.messages.bulkGet(fallbackKeys) : [];
-    if (!existing?.length) return list;
-    const next = list.slice();
-    existing.forEach((record, i) => {
-      const idx = indices[i];
-      if (idx === undefined) return;
-      const existingLabels = coerceLabelList(record?.labels);
-      if (existingLabels.length) {
-        next[idx] = { ...next[idx], labels: existingLabels };
-        return;
-      }
-      const msg = list[idx] || {};
-      const candidates = [msg?.uid, msg?.message_id, msg?.header_message_id].filter(Boolean);
-      for (const candidate of candidates) {
-        const key = `${idx}:${candidate}`;
-        if (!fallbackIndex.has(key)) continue;
-        const fallback = fallbackRecords[fallbackIndex.get(key)];
-        const fallbackLabels = coerceLabelList(fallback?.labels);
-        if (fallbackLabels.length) {
-          next[idx] = { ...next[idx], labels: fallbackLabels };
-          break;
-        }
-      }
-    });
-    return next;
-  } catch {
-    return list;
-  }
-};
-
-const mergeMissingFrom = async (account, list = []) => {
-  try {
-    const lookup = [];
-    const indices = [];
-    const fallbackKeys = [];
-    const fallbackIndex = new Map();
-    list.forEach((msg, idx) => {
-      if (!hasFromValue(msg?.from)) {
-        lookup.push([account, msg.id]);
-        indices.push(idx);
-      }
-    });
-    if (!lookup.length) return list;
-    const existing = await db.messages.bulkGet(lookup);
-    indices.forEach((msgIdx) => {
-      const msg = list[msgIdx] || {};
-      const id = msg?.id;
-      const candidates = [msg?.uid, msg?.message_id, msg?.header_message_id].filter(Boolean);
-      for (const candidate of candidates) {
-        if (candidate === id) continue;
-        fallbackIndex.set(`${msgIdx}:${candidate}`, fallbackKeys.length);
-        fallbackKeys.push([account, candidate]);
-      }
-    });
-    const fallbackRecords = fallbackKeys.length ? await db.messages.bulkGet(fallbackKeys) : [];
-    if (!existing?.length) return list;
-    const next = list.slice();
-    existing.forEach((record, i) => {
-      const idx = indices[i];
-      if (idx === undefined) return;
-      if (hasFromValue(record?.from)) {
-        next[idx] = { ...next[idx], from: record.from };
-        return;
-      }
-      const msg = list[idx] || {};
-      const candidates = [msg?.uid, msg?.message_id, msg?.header_message_id].filter(Boolean);
-      for (const candidate of candidates) {
-        const key = `${idx}:${candidate}`;
-        if (!fallbackIndex.has(key)) continue;
-        const fallback = fallbackRecords[fallbackIndex.get(key)];
-        if (hasFromValue(fallback?.from)) {
-          next[idx] = { ...next[idx], from: fallback.from };
-          break;
-        }
-      }
-    });
-    return next;
-  } catch {
-    return list;
-  }
-};
+// IndexedDB reader injected into the mergeMissing* backfills (which live in
+// mailbox-store-helpers so their logic can be unit-tested with a mock bulkGet).
+const bulkGetMessages = (keys: unknown[]) => db.messages.bulkGet(keys as never);
 
 const createMailboxStore = () => {
   // Track in-flight message list requests to prevent duplicates
@@ -1115,8 +1013,8 @@ const createMailboxStore = () => {
 
       let merged = mapped;
       if (mapped.length) {
-        merged = await mergeMissingLabels(account, mapped, labelPresence);
-        merged = await mergeMissingFrom(account, merged);
+        merged = await mergeMissingLabels(bulkGetMessages, account, mapped, labelPresence);
+        merged = await mergeMissingFrom(bulkGetMessages, account, merged);
       }
 
       // Guard against transient empty responses: if the server returns zero

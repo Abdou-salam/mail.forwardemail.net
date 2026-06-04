@@ -83,3 +83,126 @@ export const mergeMessagePages = (existing = [], incoming = []) => {
   append(incoming);
   return merged;
 };
+
+// Reads cached message records by compound key ([account, id] or alternate
+// identifiers). Injected so these backfills can be unit-tested without Dexie;
+// in the store it's wired to `db.messages.bulkGet`.
+type MessageBulkGet = (keys: unknown[]) => Promise<Array<Record<string, unknown> | undefined>>;
+
+// Backfill labels onto list messages that arrived without them by reading the
+// cached copy from IndexedDB — first by [account, id], then by alternate
+// identifiers (uid/message_id/header_message_id). Returns the input list
+// unchanged when there's nothing to look up or on any error.
+export const mergeMissingLabels = async (
+  bulkGet: MessageBulkGet,
+  account,
+  list,
+  labelPresence = [],
+) => {
+  try {
+    const lookup = [];
+    const indices = [];
+    const fallbackKeys = [];
+    const fallbackIndex = new Map();
+    list.forEach((msg, idx) => {
+      const incoming = coerceLabelList(msg.labels);
+      if (!labelPresence[idx] || incoming.length === 0) {
+        lookup.push([account, msg.id]);
+        indices.push(idx);
+      }
+    });
+    if (!lookup.length) return list;
+    const existing = await bulkGet(lookup);
+    indices.forEach((msgIdx) => {
+      const msg = list[msgIdx] || {};
+      const id = msg?.id;
+      const candidates = [msg?.uid, msg?.message_id, msg?.header_message_id].filter(Boolean);
+      for (const candidate of candidates) {
+        if (candidate === id) continue;
+        fallbackIndex.set(`${msgIdx}:${candidate}`, fallbackKeys.length);
+        fallbackKeys.push([account, candidate]);
+      }
+    });
+    const fallbackRecords = fallbackKeys.length ? await bulkGet(fallbackKeys) : [];
+    if (!existing?.length) return list;
+    const next = list.slice();
+    existing.forEach((record, i) => {
+      const idx = indices[i];
+      if (idx === undefined) return;
+      const existingLabels = coerceLabelList(record?.labels);
+      if (existingLabels.length) {
+        next[idx] = { ...next[idx], labels: existingLabels };
+        return;
+      }
+      const msg = list[idx] || {};
+      const candidates = [msg?.uid, msg?.message_id, msg?.header_message_id].filter(Boolean);
+      for (const candidate of candidates) {
+        const key = `${idx}:${candidate}`;
+        if (!fallbackIndex.has(key)) continue;
+        const fallback = fallbackRecords[fallbackIndex.get(key)];
+        const fallbackLabels = coerceLabelList(fallback?.labels);
+        if (fallbackLabels.length) {
+          next[idx] = { ...next[idx], labels: fallbackLabels };
+          break;
+        }
+      }
+    });
+    return next;
+  } catch {
+    return list;
+  }
+};
+
+// Backfill the `from` address onto list messages that arrived without one,
+// same cache-lookup strategy as mergeMissingLabels.
+export const mergeMissingFrom = async (bulkGet: MessageBulkGet, account, list = []) => {
+  try {
+    const lookup = [];
+    const indices = [];
+    const fallbackKeys = [];
+    const fallbackIndex = new Map();
+    list.forEach((msg, idx) => {
+      if (!hasFromValue(msg?.from)) {
+        lookup.push([account, msg.id]);
+        indices.push(idx);
+      }
+    });
+    if (!lookup.length) return list;
+    const existing = await bulkGet(lookup);
+    indices.forEach((msgIdx) => {
+      const msg = list[msgIdx] || {};
+      const id = msg?.id;
+      const candidates = [msg?.uid, msg?.message_id, msg?.header_message_id].filter(Boolean);
+      for (const candidate of candidates) {
+        if (candidate === id) continue;
+        fallbackIndex.set(`${msgIdx}:${candidate}`, fallbackKeys.length);
+        fallbackKeys.push([account, candidate]);
+      }
+    });
+    const fallbackRecords = fallbackKeys.length ? await bulkGet(fallbackKeys) : [];
+    if (!existing?.length) return list;
+    const next = list.slice();
+    existing.forEach((record, i) => {
+      const idx = indices[i];
+      if (idx === undefined) return;
+      if (hasFromValue(record?.from)) {
+        next[idx] = { ...next[idx], from: record.from };
+        return;
+      }
+      const msg = list[idx] || {};
+      const candidates = [msg?.uid, msg?.message_id, msg?.header_message_id].filter(Boolean);
+      for (const candidate of candidates) {
+        const key = `${idx}:${candidate}`;
+        if (!fallbackIndex.has(key)) continue;
+        const fallback = fallbackRecords[fallbackIndex.get(key)];
+        if (hasFromValue(fallback?.from)) {
+          next[idx] = { ...next[idx], from: fallback.from };
+          break;
+        }
+      }
+    });
+    return next;
+  } catch {
+    return list;
+  }
+};
