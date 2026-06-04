@@ -3,8 +3,21 @@
 // These cover building the server-side search query params from parsed filters,
 // and merging local (FlexSearch) hits with server hits. Side-effect-free.
 
-import type { parseSearchQuery } from '../utils/search-query';
 import type { SearchResult } from '../types';
+
+// The subset of parseSearchQuery()'s `filters` output that the server query
+// builder consumes. parseSearchQuery lives in untyped JS, so spelling this out
+// here gives real types instead of the `any` a ReturnType import would yield.
+export interface SearchFilters {
+  from?: string[];
+  to?: string[];
+  subject?: string[];
+  isUnread?: boolean | null;
+  isStarred?: boolean | null;
+  hasAttachment?: boolean | null;
+  after?: number | null;
+  before?: number | null;
+}
 
 interface ServerSearchParams {
   search?: string;
@@ -30,7 +43,7 @@ interface ServerSearchParams {
  */
 export const buildServerSearchParams = (
   text: string,
-  filters: ReturnType<typeof parseSearchQuery>['filters'],
+  filters: SearchFilters,
   folder: string | null,
   limit: number,
 ): ServerSearchParams | null => {
