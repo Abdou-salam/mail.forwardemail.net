@@ -40,7 +40,7 @@ body {
   font-family: var(--font-sans);
   background:
     radial-gradient(circle at 20% 20%, rgba(0, 175, 248, 0.1) 0, transparent 25%),
-    radial-gradient(circle at 80% 0%, rgba(0, 42, 144, 0.18) 0, transparent 30%), #02060f;
+    radial-gradient(circle at 80% 0%, rgba(0, 42, 144, 0.18) 0, transparent 30%), #0a0a0a;
   color: var(--color-text);
   overflow-x: hidden;
   overflow-y: hidden;
@@ -143,7 +143,7 @@ body.light-mode:not(.mailbox-mode) {
   /* Keep the galaxy vibe even in light mode */
   background:
     radial-gradient(circle at 20% 20%, rgba(0, 175, 248, 0.08) 0, transparent 25%),
-    radial-gradient(circle at 80% 0%, rgba(0, 42, 144, 0.14) 0, transparent 30%), #02060f;
+    radial-gradient(circle at 80% 0%, rgba(0, 42, 144, 0.14) 0, transparent 30%), #0a0a0a;
   color: var(--color-text);
 }
 

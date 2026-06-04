@@ -13,6 +13,7 @@ import { Remote } from '../utils/remote';
 import { isDemoMode } from '../utils/demo-mode';
 import type { Message, SearchStats, SearchResult } from '../types';
 import { warn } from '../utils/logger.ts';
+import { buildServerSearchParams, mergeResults } from './search-helpers';
 
 export interface SearchHealth {
   healthy: boolean;
@@ -318,85 +319,6 @@ const removeFromIndex = async (ids: string[] = []): Promise<void> => {
 // that was decrypted server-side) which the local FlexSearch index may
 // not have if the user never opened the message.
 
-interface ServerSearchParams {
-  search?: string;
-  subject?: string;
-  from?: string;
-  to?: string;
-  folder?: string;
-  is_unread?: boolean;
-  is_flagged?: boolean;
-  has_attachments?: boolean;
-  since?: string;
-  before?: string;
-  limit?: number;
-  page?: number;
-  raw?: boolean;
-  attachments?: boolean;
-}
-
-/**
- * Build API query parameters from parsed search filters.
- * Returns null if there is nothing meaningful to send to the server
- * (e.g. filter-only queries that the server cannot evaluate).
- */
-const buildServerSearchParams = (
-  text: string,
-  filters: ReturnType<typeof parseSearchQuery>['filters'],
-  folder: string | null,
-  limit: number,
-): ServerSearchParams | null => {
-  const params: ServerSearchParams = {
-    limit,
-    page: 1,
-    raw: false,
-    attachments: false,
-  };
-
-  // Free-text goes to the general `search` parameter which searches
-  // across subject, body, from, to, and other fields server-side.
-  if (text) {
-    params.search = text;
-  }
-
-  // Map structured operators to API-specific parameters
-  if (filters?.from?.length) {
-    params.from = filters.from.join(' ');
-  }
-  if (filters?.to?.length) {
-    params.to = filters.to.join(' ');
-  }
-  if (filters?.subject?.length) {
-    params.subject = filters.subject.join(' ');
-  }
-  if (filters.isUnread === true) {
-    params.is_unread = true;
-  }
-  if (filters.isStarred === true) {
-    params.is_flagged = true;
-  }
-  if (filters.hasAttachment === true) {
-    params.has_attachments = true;
-  }
-  if (filters.after) {
-    params.since = new Date(filters.after).toISOString();
-  }
-  if (filters.before) {
-    params.before = new Date(filters.before).toISOString();
-  }
-
-  // Folder
-  if (folder && folder !== 'all') {
-    params.folder = folder;
-  }
-
-  // Only send to server if there is at least one meaningful search param
-  const hasServerParam = params.search || params.from || params.to || params.subject;
-  if (!hasServerParam) return null;
-
-  return params;
-};
-
 /**
  * Execute server-side search and return normalized results.
  * Returns an empty array on any error (server search is best-effort).
@@ -449,29 +371,6 @@ const serverSearch = async (
     warn('[searchStore] server search failed, using local results only', err);
     return [];
   }
-};
-
-/**
- * Merge local and server search results, deduplicating by message ID.
- * Server results take priority (they may have more complete data).
- */
-const mergeResults = (localHits: SearchResult[], serverHits: SearchResult[]): SearchResult[] => {
-  if (!serverHits.length) return localHits;
-  if (!localHits.length) return serverHits;
-
-  const byId = new Map<string, SearchResult>();
-
-  // Local results first (lower priority)
-  for (const hit of localHits) {
-    if (hit?.id) byId.set(hit.id, hit);
-  }
-
-  // Server results overwrite (higher priority — more complete data)
-  for (const hit of serverHits) {
-    if (hit?.id) byId.set(hit.id, hit);
-  }
-
-  return Array.from(byId.values());
 };
 
 const search = async (

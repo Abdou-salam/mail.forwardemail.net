@@ -210,6 +210,10 @@ export const tasksSort: Readable<TasksSortKey> = derived(
   [remoteSettings, localSettingsVersion],
   ([$remote]) => normalizeTasksSort(getEffectiveSettingValue('tasks_sort', { remote: $remote })),
 );
+export const startWeekOnSunday: Readable<boolean> = derived(
+  [remoteSettings, localSettingsVersion],
+  ([$remote]) => Boolean(getEffectiveSettingValue('start_week_on_sunday', { remote: $remote })),
+);
 
 const getAccountKey = (account?: string): string => account || Local.get('email') || 'default';
 

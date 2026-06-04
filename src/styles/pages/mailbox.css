@@ -131,8 +131,8 @@
   height: 44px;
   min-width: 44px;
   min-height: 44px;
-  border: 1px solid #1f2937;
-  background: #0f172a;
+  border: 1px solid #333333;
+  background: #1a1a1a;
   color: #e5e7eb;
   cursor: pointer;
 }
@@ -145,8 +145,8 @@
   height: 44px;
   min-width: 44px;
   min-height: 44px;
-  border: 1px solid #1f2937;
-  background: #0f172a;
+  border: 1px solid #333333;
+  background: #1a1a1a;
   color: #e5e7eb;
   cursor: pointer;
 }
@@ -390,10 +390,10 @@
 
 .fe-storage-bar {
   height: 6px;
-  background: #0c1424;
+  background: #1a1a1a;
   border-radius: 999px;
   overflow: hidden;
-  border: 1px solid #1f2937;
+  border: 1px solid #333333;
 }
 
 .fe-storage-fill {
@@ -473,7 +473,7 @@
 .fe-chip.ghost {
   background: rgba(255, 255, 255, 0.06);
   color: #e5e7eb;
-  border-color: #1f2937;
+  border-color: #333333;
 }
 
 .fe-search,

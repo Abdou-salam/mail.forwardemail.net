@@ -4037,15 +4037,15 @@
   }
 
   :global(emoji-picker.dark) {
-    --background: #1e293b;
-    --border-color: #334155;
-    --input-border-color: #475569;
+    --background: #242424;
+    --border-color: #333333;
+    --input-border-color: #404040;
     --input-font-color: #e2e8f0;
     --input-placeholder-color: #94a3b8;
     --category-font-color: #94a3b8;
     --indicator-color: #00aff8;
     --outline-color: #94a3b8;
-    --button-active-background: #475569;
-    --button-hover-background: #334155;
+    --button-active-background: #404040;
+    --button-hover-background: #333333;
   }
 </style>

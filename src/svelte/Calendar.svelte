@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import type { Readable, Unsubscriber } from 'svelte/store';
+  import { get, type Readable, type Unsubscriber } from 'svelte/store';
   import { downloadFile } from '../utils/download';
   import { pickFiles } from '../utils/file-picker';
   import { ScheduleXCalendar } from '@schedule-x/svelte';
@@ -29,6 +29,7 @@
     effectiveTheme,
     hideCompletedTodos,
     tasksSort,
+    startWeekOnSunday,
     setSettingValue,
     type TasksSortKey,
   } from '../stores/settingsStore';
@@ -2270,7 +2271,7 @@
       if (!id) return;
       const base = resolveCalendarColor(cal, index);
       const lightContainer = blendHex(base, '#ffffff', 0.85);
-      const darkContainer = blendHex(base, '#0f172a', 0.7);
+      const darkContainer = blendHex(base, '#1a1a1a', 0.7);
       entries[id as string] = {
         colorName: id,
         lightColors: {
@@ -2426,6 +2427,24 @@
     refreshTaskReminders(allEvents as Record<string, unknown>[]);
   });
 
+  // Rebuild the calendar when the "start week on Sunday" preference changes.
+  // schedule-x only reads firstDayOfWeek at creation, so we drop the instance
+  // and let the create effect below re-run (it depends on calendarInstance).
+  let lastWeekStartSunday: boolean | null = null;
+  $effect(() => {
+    const sunday = $startWeekOnSunday;
+    if (lastWeekStartSunday === null) {
+      lastWeekStartSunday = sunday;
+      return;
+    }
+    if (sunday !== lastWeekStartSunday) {
+      lastWeekStartSunday = sunday;
+      calendarCreated = false;
+      lastEventCount = -1;
+      calendarInstance = null;
+    }
+  });
+
   $effect(() => {
     if (isActive && visibleEvents && calendars.length) {
       const eventCount = visibleEvents?.length || 0;
@@ -2458,6 +2477,9 @@
           locale: i18n.getShortFormattingLocale() || 'en-US',
           views: [viewDay, viewWeek, viewMonthGrid],
           defaultView: resolveDefaultView(),
+          // 0 = Sunday, 1 = Monday (schedule-x WeekDay). Read non-reactively;
+          // the effect below rebuilds the calendar when this setting changes.
+          firstDayOfWeek: get(startWeekOnSunday) ? 0 : 1,
           events: safeEvents,
           isDark,
           defaultCalendarId: resolveActiveCalendarId() || 'default',

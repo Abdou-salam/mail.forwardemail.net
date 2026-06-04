@@ -95,8 +95,8 @@
 /* Dark mode / light mode overrides */
 :root.dark .fe-appearance-menu,
 .dark .fe-appearance-menu {
-  background: var(--popover, #1e293b);
-  border-color: var(--border, #334155);
+  background: var(--popover, #242424);
+  border-color: var(--border, #333333);
 }
 
 :root.dark .fe-appearance-menu-item,

@@ -417,6 +417,16 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
     valueType: 'string',
     defaultValue: 'due',
   },
+  start_week_on_sunday: {
+    id: 'start_week_on_sunday',
+    label: 'Start Week on Sunday',
+    scope: SETTING_SCOPES.DEVICE,
+    localKey: 'start_week_on_sunday',
+    valueType: 'boolean',
+    defaultValue: true,
+    localParse: (raw) => parseBoolean(raw, true),
+    localSerialize: (value) => serializeBoolean(Boolean(value)),
+  },
 };
 
 export const getSettingDefinition = (id: string): SettingDefinition | undefined =>

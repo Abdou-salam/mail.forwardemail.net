@@ -35,7 +35,7 @@
   width: 100%;
   max-width: 500px;
   max-height: 85vh;
-  background: var(--surface-modal, #1e293b);
+  background: var(--surface-modal, #242424);
   border-radius: var(--radius-xl, 12px) var(--radius-xl, 12px) 0 0;
   box-shadow: var(--shadow-2xl, 0 -4px 20px rgba(0, 0, 0, 0.3));
   overflow: hidden;

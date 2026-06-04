@@ -183,6 +183,7 @@
   let blockTrackingPixels = $state(true);
   let viewPlainText = $state(false);
   let hideCompletedTodosValue = $state(false);
+  let startWeekOnSundayValue = $state(true);
   let fontChoice = $state('system');
   let fontLoading = $state(false);
   let availableFonts = $state<{ key: string; name: string; family: string }[]>([]);
@@ -632,6 +633,9 @@
     hideCompletedTodosValue = Boolean(
       getEffectiveSettingValue('hide_completed_todos', { account: currentAcct }),
     );
+    startWeekOnSundayValue = Boolean(
+      getEffectiveSettingValue('start_week_on_sunday', { account: currentAcct }),
+    );
 
     fontChoice = getEffectiveSettingValue('font', { account: currentAcct }) || 'system';
     currentFontFamily = getFontFamily(fontChoice);
@@ -1056,6 +1060,20 @@
         (err as Error)?.message || 'Failed to update completed todos setting',
         'error',
       );
+    }
+  };
+
+  const toggleStartWeekOnSunday = () => {
+    try {
+      setSettingValue('start_week_on_sunday', startWeekOnSundayValue, {
+        account: getAccountId(),
+      });
+      toasts?.show?.(
+        startWeekOnSundayValue ? 'Week now starts on Sunday' : 'Week now starts on Monday',
+        'success',
+      );
+    } catch (err) {
+      toasts?.show?.((err as Error)?.message || 'Failed to update week start setting', 'error');
     }
   };
 
@@ -2109,6 +2127,24 @@
       {/if}
 
       {#if section === 'calendar'}
+        <Card.Root>
+          <Card.Header>
+            <Card.Title>Week</Card.Title>
+            <Card.Description>Choose which day the calendar week begins on.</Card.Description>
+          </Card.Header>
+          <Card.Content class="space-y-4">
+            <label class="flex items-center gap-3">
+              <Checkbox
+                bind:checked={startWeekOnSundayValue}
+                onCheckedChange={toggleStartWeekOnSunday}
+              />
+              <span>Start week on Sunday</span>
+            </label>
+            <p class="text-sm text-muted-foreground">
+              When enabled, week and month views begin on Sunday. Otherwise they begin on Monday.
+            </p>
+          </Card.Content>
+        </Card.Root>
         <Card.Root>
           <Card.Header>
             <Card.Title>Tasks</Card.Title>

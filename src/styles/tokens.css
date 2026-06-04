@@ -474,19 +474,20 @@
   --sidebar-border: 0 0% 15.9%;
   --sidebar-ring: 217.2 91.2% 59.8%;
 
-  /* Surface colors */
-  --surface-base: #02060f;
-  --surface-sunken: var(--slate-950);
-  --surface-default: var(--slate-850);
-  --surface-raised: var(--slate-900);
-  --surface-overlay: var(--slate-800);
-  --surface-card: var(--slate-900);
-  --surface-panel: var(--slate-850);
-  --surface-sidebar: var(--slate-950);
-  --surface-modal: var(--slate-800);
-  --surface-elevated: var(--slate-800);
-  --surface-tooltip: var(--slate-700);
-  --surface-toast: var(--slate-800);
+  /* Surface colors — neutral greys (no blue slate tint). Lightness steps
+   * mirror the previous slate-950→700 ramp so depth/elevation reads the same. */
+  --surface-base: #0a0a0a;
+  --surface-sunken: #0a0a0a;
+  --surface-default: #141414;
+  --surface-raised: #1a1a1a;
+  --surface-overlay: #242424;
+  --surface-card: #1a1a1a;
+  --surface-panel: #141414;
+  --surface-sidebar: #0a0a0a;
+  --surface-modal: #242424;
+  --surface-elevated: #242424;
+  --surface-tooltip: #333333;
+  --surface-toast: #242424;
   --surface-hover: rgba(255, 255, 255, 0.05);
   --surface-unread: rgba(0, 175, 248, 0.08);
   --surface-unread-hover: rgba(0, 175, 248, 0.12);
@@ -494,8 +495,8 @@
   /* Backward compatibility */
   --color-bg: var(--surface-default);
   --color-panel: var(--surface-raised);
-  --color-bg-secondary: #111827;
-  --color-surface: var(--slate-800);
+  --color-bg-secondary: #171717;
+  --color-surface: #242424;
   --color-surface-strong: #ffffff;
 
   /* Text colors */
@@ -510,11 +511,11 @@
   --color-text-secondary: var(--text-secondary);
 
   /* Border colors */
-  --border-default: var(--slate-700);
+  --border-default: #333333;
   --border-subtle: rgba(255, 255, 255, 0.08);
-  --border-strong: var(--slate-600);
+  --border-strong: #404040;
   --color-border: var(--border-default);
-  --color-border-light: var(--slate-600);
+  --color-border-light: #404040;
 
   /* Shadows (darker for dark mode) */
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.2);

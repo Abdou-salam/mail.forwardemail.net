@@ -6649,25 +6649,27 @@
                                 </div>
                               </div>
                             {:else}
-                              <!-- Desktop: checkbox + card/classic layout toggle -->
-                              <button
-                                class={`relative w-8 h-8 rounded flex items-center justify-center shrink-0 transition-colors ${($selectedConversationIds || []).includes(conv.id) ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}`}
-                                type="button"
-                                aria-label={($selectedConversationIds || []).includes(conv.id)
-                                  ? 'Deselect'
-                                  : 'Select'}
-                                data-slot="checkbox"
-                                onclick={(e) => {
-                                  e.stopPropagation();
-                                  toggleSelection(conv, e);
-                                }}
-                              >
-                                {#if ($selectedConversationIds || []).includes(conv.id)}
-                                  <CheckSquare class="h-5 w-5" />
-                                {:else}
-                                  <Square class="h-5 w-5" />
-                                {/if}
-                              </button>
+                              <!-- Desktop: checkbox shown only in classic view or while in selection mode -->
+                              {#if !cardView || selectionMode}
+                                <button
+                                  class={`relative w-8 h-8 rounded flex items-center justify-center shrink-0 transition-colors ${($selectedConversationIds || []).includes(conv.id) ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}`}
+                                  type="button"
+                                  aria-label={($selectedConversationIds || []).includes(conv.id)
+                                    ? 'Deselect'
+                                    : 'Select'}
+                                  data-slot="checkbox"
+                                  onclick={(e) => {
+                                    e.stopPropagation();
+                                    toggleSelection(conv, e);
+                                  }}
+                                >
+                                  {#if ($selectedConversationIds || []).includes(conv.id)}
+                                    <CheckSquare class="h-5 w-5" />
+                                  {:else}
+                                    <Square class="h-5 w-5" />
+                                  {/if}
+                                </button>
+                              {/if}
                               {#if cardView}
                                 <div class="flex-1 min-w-0 flex flex-col gap-0.5">
                                   <!-- Line 1: Sender (bold, slightly bigger) + icons + Date (right, muted) -->
@@ -6944,24 +6946,26 @@
                           ondragstart={(e) => handleDragStart(e, msg)}
                           ondragend={handleDragEnd}
                         >
-                          <!-- Desktop: checkbox + card/classic layout toggle -->
-                          <button
-                            class={`relative w-8 h-8 rounded flex items-center justify-center shrink-0 transition-colors ${($selectedConversationIds || []).includes(msg.id) ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}`}
-                            type="button"
-                            aria-label={($selectedConversationIds || []).includes(msg.id)
-                              ? 'Deselect'
-                              : 'Select'}
-                            onclick={(e) => {
-                              e.stopPropagation();
-                              toggleSelection({ id: msg.id }, e);
-                            }}
-                          >
-                            {#if ($selectedConversationIds || []).includes(msg.id)}
-                              <CheckSquare class="h-5 w-5" />
-                            {:else}
-                              <Square class="h-5 w-5" />
-                            {/if}
-                          </button>
+                          <!-- Desktop: checkbox shown only in classic view or while in selection mode -->
+                          {#if !cardView || selectionMode}
+                            <button
+                              class={`relative w-8 h-8 rounded flex items-center justify-center shrink-0 transition-colors ${($selectedConversationIds || []).includes(msg.id) ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}`}
+                              type="button"
+                              aria-label={($selectedConversationIds || []).includes(msg.id)
+                                ? 'Deselect'
+                                : 'Select'}
+                              onclick={(e) => {
+                                e.stopPropagation();
+                                toggleSelection({ id: msg.id }, e);
+                              }}
+                            >
+                              {#if ($selectedConversationIds || []).includes(msg.id)}
+                                <CheckSquare class="h-5 w-5" />
+                              {:else}
+                                <Square class="h-5 w-5" />
+                              {/if}
+                            </button>
+                          {/if}
                           {#if cardView}
                             <div class="flex-1 min-w-0 flex flex-col gap-0.5">
                               <!-- Line 1: Sender (bold, slightly bigger) + icons + Date (right, muted) -->
