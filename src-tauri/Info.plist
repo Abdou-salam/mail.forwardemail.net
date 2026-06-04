@@ -17,5 +17,25 @@
   <string>Forward Email needs access to your Documents folder to save email attachments there.</string>
   <key>NSDesktopFolderUsageDescription</key>
   <string>Forward Email needs access to your Desktop folder to save email attachments there.</string>
+
+  <!--
+    Disable App Nap. When the window sits on a background Space (Mission
+    Control desktop), macOS naps the app and WebKit suspends the WKWebView's
+    WebContent process; on return the page is re-rendered/re-fetched, which the
+    user sees as a ~1-2s blank reload. Keeping the app out of App Nap lets the
+    web content (and the existing background mail sync) stay resident.
+
+    Tradeoff: slightly higher background CPU/battery use while occluded — usually
+    acceptable for a mail client that already syncs in the background.
+
+    NOTE: App Nap only applies to a built/notarized .app bundle, not `tauri dev`.
+    Verify with `pnpm tauri:build`, then put the app on a dedicated Space and
+    switch away/back. If this alone doesn't stop the reload, the WebContent
+    process is being jettisoned independently and we escalate to native objc2
+    (hold an NSProcessInfo activity assertion and/or set the WKWebView's native
+    background so any discard shows the theme colour, not white).
+  -->
+  <key>NSAppSleepDisabled</key>
+  <true/>
 </dict>
 </plist>
