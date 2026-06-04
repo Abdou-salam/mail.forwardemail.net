@@ -10,6 +10,39 @@
     />
     <title>Forward Email Webmail</title>
 
+    <!--
+      Paint the themed background immediately, before the JS/CSS bundle loads.
+      base.css (which sets the real background) only applies once main.ts runs,
+      so without this the gap shows the WebView's default white. That gap is most
+      visible on macOS: when the window sits on a background Space, WebKit
+      discards the rendered page and reloads it on return — a ~1-2s white flash.
+      The <style> covers the OS-preference case; the inline script honours an
+      explicit in-app theme choice before applyTheme() runs.
+    -->
+    <style>
+      html {
+        background-color: #0a0a0a;
+      }
+      @media (prefers-color-scheme: light) {
+        html {
+          background-color: #f5f7fb;
+        }
+      }
+    </style>
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem('webmail_theme') || '';
+          if (t.indexOf('dark') !== -1) {
+            document.documentElement.style.backgroundColor = '#0a0a0a';
+          } else if (t.indexOf('light') !== -1) {
+            document.documentElement.style.backgroundColor = '#f5f7fb';
+          }
+          // 'system'/unset falls through to the prefers-color-scheme rule above.
+        } catch (e) {}
+      })();
+    </script>
+
     <link rel="manifest" href="/manifest.json" />
     <link rel="icon" href="/favicon.ico" />
     <link rel="icon" type="image/svg+xml" href="/icons/favicon.svg" />
