@@ -72,6 +72,7 @@ import {
   hasFromValue,
   mergeMessagePages,
 } from './mailbox-store-helpers';
+import { createPendingDeleteTracker, createPendingFlagTracker } from './optimistic-trackers';
 
 // Folders that are always protected from rename/delete
 const ALWAYS_PROTECTED = new Set(['INBOX', 'OUTBOX']);
@@ -80,91 +81,20 @@ const EXPANDED_FOLDERS_KEY = 'folder_expansion_state';
 const FOLDERS_CACHE_TTL = 15000;
 const folderLoadState = new Map();
 
-// Track optimistically deleted message IDs to prevent stale server responses
-// from re-adding them to the store. Entries auto-expire after 60 seconds
-// (generous to cover slow connections / queued sync tasks).
-const pendingDeletes: Map<string, number> = new Map(); // id -> timestamp
-const PENDING_DELETE_TTL = 60_000;
+// Optimistic-update trackers (pending deletes + flag mutations) live in
+// optimistic-trackers.ts so their reconciliation logic can be unit-tested.
+// Instantiated once here, then rebound to the original function names so every
+// call site and the actions API stay unchanged.
+const pendingDeleteTracker = createPendingDeleteTracker();
+const addPendingDeletes = pendingDeleteTracker.add;
+const filterPendingDeletes = pendingDeleteTracker.filter;
+export const getPendingDeleteIds = pendingDeleteTracker.getIds;
+const confirmDeletes = pendingDeleteTracker.confirm;
 
-const addPendingDeletes = (ids: string[]) => {
-  const now = Date.now();
-  for (const id of ids) {
-    if (id) pendingDeletes.set(id, now);
-  }
-};
-
-const filterPendingDeletes = (msgs: Record<string, unknown>[]) => {
-  if (!pendingDeletes.size) return msgs;
-  // Prune expired entries
-  const now = Date.now();
-  for (const [id, ts] of pendingDeletes) {
-    if (now - ts > PENDING_DELETE_TTL) pendingDeletes.delete(id);
-  }
-  if (!pendingDeletes.size) return msgs;
-  return msgs.filter((m) => !pendingDeletes.has(m.id));
-};
-
-export const getPendingDeleteIds = (): string[] => {
-  const now = Date.now();
-  for (const [id, ts] of pendingDeletes) {
-    if (now - ts > PENDING_DELETE_TTL) pendingDeletes.delete(id);
-  }
-  return [...pendingDeletes.keys()];
-};
-
-const confirmDeletes = (serverIds: Set<string>) => {
-  // If a pending-delete ID is absent from the server response, the server
-  // has processed it — safe to stop filtering.
-  for (const id of pendingDeletes.keys()) {
-    if (!serverIds.has(id)) pendingDeletes.delete(id);
-  }
-};
-
-// Track optimistic flag mutations (read/star) so stale server responses
-// don't overwrite them. Entries auto-expire after 30 seconds.
-interface PendingFlagMutation {
-  ts: number;
-  is_unread?: boolean;
-  is_unread_index?: number;
-  flags?: string[];
-  is_starred?: boolean;
-}
-const pendingFlagMutations: Map<string, PendingFlagMutation> = new Map(); // id -> mutation
-
-const addPendingFlagMutation = (id: string, mutation: Omit<PendingFlagMutation, 'ts'>) => {
-  if (!id) return;
-  pendingFlagMutations.set(id, { ...mutation, ts: Date.now() });
-};
-
-const applyPendingFlagMutations = (msgs: Record<string, unknown>[]) => {
-  if (!pendingFlagMutations.size) return msgs;
-  // Prune expired entries
-  const now = Date.now();
-  for (const [id, m] of pendingFlagMutations) {
-    if (now - m.ts > PENDING_DELETE_TTL) pendingFlagMutations.delete(id);
-  }
-  if (!pendingFlagMutations.size) return msgs;
-  return msgs.map((msg) => {
-    const pending = pendingFlagMutations.get(msg.id);
-    if (!pending) return msg;
-    const { ts: _ts, ...overrides } = pending;
-    return { ...msg, ...overrides };
-  });
-};
-
-const confirmFlagMutations = (serverMsgs: Record<string, unknown>[]) => {
-  // If the server response matches the optimistic state, the mutation
-  // has been processed — safe to stop overriding.
-  for (const msg of serverMsgs) {
-    const pending = pendingFlagMutations.get(msg.id);
-    if (!pending) continue;
-    if (pending.is_unread !== undefined && msg.is_unread === pending.is_unread) {
-      pendingFlagMutations.delete(msg.id);
-    } else if (pending.is_starred !== undefined && msg.is_starred === pending.is_starred) {
-      pendingFlagMutations.delete(msg.id);
-    }
-  }
-};
+const pendingFlagTracker = createPendingFlagTracker();
+const addPendingFlagMutation = pendingFlagTracker.add;
+const applyPendingFlagMutations = pendingFlagTracker.apply;
+const confirmFlagMutations = pendingFlagTracker.confirm;
 
 const invalidateFolderInMemCache = (account, folder) => {
   const prefix = `${account}:${folder}:`;
@@ -1402,8 +1332,8 @@ const createMailboxStore = () => {
 
   const resetForAccount = () => {
     inFlightMessageListRequest = null;
-    pendingDeletes.clear();
-    pendingFlagMutations.clear();
+    pendingDeleteTracker.clear();
+    pendingFlagTracker.clear();
     // Clear folder TTL cache so the next loadFolders() does a fresh fetch
     // instead of returning stale/empty data from a previous session.
     folderLoadState.clear();
