@@ -664,7 +664,14 @@ const createMailboxStore = () => {
     const autoSelectDisabled = Local.get('auto_select_first') === 'false';
     const isClassicLayout = normalizeLayoutMode(get(effectiveLayoutMode)) === 'classic';
     const allowAutoSelect = !isMobileViewport() && !autoSelectDisabled && isClassicLayout;
-    const shouldAppend = isMobileViewport() && currentPage > 1;
+    // Append on every page after the first. Infinite scroll is the pagination
+    // mechanism on all viewports now (the numbered pager was removed), so
+    // desktop must accumulate pages too. Previously this was gated to mobile,
+    // so on desktop page 2 REPLACED page 1 — the list was stuck at a single
+    // page (~50 messages) and never grew on scroll. That also made old mail
+    // look like it stopped at the oldest message of that first page (e.g.
+    // ~July 2025 for a low-volume inbox); older pages exist but never loaded.
+    const shouldAppend = currentPage > 1;
     const sortParam = (() => {
       if (currentSort === 'oldest') return 'date';
       if (currentSort === 'newest') return '-date';
