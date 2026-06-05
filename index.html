@@ -6,39 +6,37 @@
     <meta name="theme-color" content="#20C1ED" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.forwardemail.net wss://api.forwardemail.net https://api.github.com; worker-src 'self' blob:; frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; manifest-src 'self'; media-src 'none'"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.forwardemail.net wss://api.forwardemail.net https://api.github.com; worker-src 'self' blob:; frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; manifest-src 'self'; media-src 'none'"
     />
     <title>Forward Email Webmail</title>
 
     <!--
-      Paint the themed background immediately, before the JS/CSS bundle loads.
-      base.css (which sets the real background) only applies once main.ts runs,
-      so without this the gap shows the WebView's default white. That gap is most
-      visible on macOS: when the window sits on a background Space, WebKit
-      discards the rendered page and reloads it on return — a ~1-2s white flash.
-      The <style> covers the OS-preference case; the inline script honours an
-      explicit in-app theme choice before applyTheme() runs.
+      Paint the themed background before the JS/CSS bundle loads so a webview
+      reload/repaint shows the app's colour instead of white (most visible on
+      macOS Space switches, where WebKit discards the page and re-renders on
+      return). base.css sets the real theme once the bundle runs and supersedes
+      this.
+
+      This MUST be done via CSSOM in a <script> — NOT a <style> element or a
+      style="" attribute. An inline <style> makes Tauri inject a style-src nonce
+      into the built CSP, and a nonce disables 'unsafe-inline', which then blocks
+      every inline style attribute in the app (this caused the 0.11.7 release
+      regression: a flood of style-src-attr CSP violations → the error overlay →
+      a frozen UI). A <script> only triggers a script-src nonce, which the app
+      already relies on, and CSSOM style mutations are not subject to CSP.
     -->
-    <style>
-      html {
-        background-color: #0a0a0a;
-      }
-      @media (prefers-color-scheme: light) {
-        html {
-          background-color: #f5f7fb;
-        }
-      }
-    </style>
     <script>
       (function () {
         try {
           var t = localStorage.getItem('webmail_theme') || '';
-          if (t.indexOf('dark') !== -1) {
-            document.documentElement.style.backgroundColor = '#0a0a0a';
-          } else if (t.indexOf('light') !== -1) {
-            document.documentElement.style.backgroundColor = '#f5f7fb';
-          }
-          // 'system'/unset falls through to the prefers-color-scheme rule above.
+          var dark;
+          if (t.indexOf('dark') !== -1) dark = true;
+          else if (t.indexOf('light') !== -1) dark = false;
+          else
+            dark = !!(
+              window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+            );
+          document.documentElement.style.backgroundColor = dark ? '#0a0a0a' : '#f5f7fb';
         } catch (e) {}
       })();
     </script>
@@ -172,9 +170,38 @@
         // console.error above still records them for support.
         function isExtensionViolation(e) {
           if (!e) return false;
+          // Match extension / browser-internal schemes ANYWHERE in the source or
+          // blocked URI — not anchored. Firefox may report the source as a bare
+          // "moz-extension" or a full "moz-extension://…/inject.js" URL; both,
+          // plus chrome:/resource: internals, should be ignored.
           var re =
-            /^(moz-extension|chrome-extension|safari-web-extension|safari-extension|webkit-masked-url|extension):/i;
+            /(moz-extension|chrome-extension|safari-web-extension|safari-extension|webkit-masked-url|chrome:|resource:)/i;
           return re.test(String(e.sourceFile || '')) || re.test(String(e.blockedURI || ''));
+        }
+        // A CSP violation we should NOT turn into a fatal overlay because it
+        // wasn't caused by our own bundle — blanking the app behind a scary panel
+        // is wrong. This relaxes how aggressively the overlay reacts WITHOUT
+        // weakening the policy itself: eval stays blocked, extensions/injected
+        // scripts just stop nuking the UI. (A user on Firefox saw an extension's
+        // blocked eval flash-and-blank the sign-in screen.)
+        function isIgnorableCspViolation(e) {
+          if (!e) return true;
+          if (isExtensionViolation(e)) return true;
+          var blocked = String(e.blockedURI || '').toLowerCase();
+          // Our CSP intentionally blocks eval (only wasm-unsafe-eval is allowed)
+          // and the app never calls eval, so an eval violation is always from a
+          // browser extension or injected script, never our code.
+          if (blocked === 'eval' || blocked === 'wasm-eval') return true;
+          // A source on a different origin than ours is injected/foreign code.
+          // Same-origin scripts and inline violations (which report our own
+          // document URL) still surface, so genuine app faults stay visible.
+          var src = String(e.sourceFile || '');
+          if (src.indexOf('://') !== -1) {
+            try {
+              if (location.origin && src.indexOf(location.origin) !== 0) return true;
+            } catch (_) {}
+          }
+          return false;
         }
         function showFatal(detail) {
           if (isTestHarnessNoise(detail)) return;
@@ -274,7 +301,7 @@
           try {
             console.error('[fe-fatal][csp]', e);
           } catch (_) {}
-          if (isExtensionViolation(e)) return;
+          if (isIgnorableCspViolation(e)) return;
           var detail = [
             'CSP violation',
             'directive: ' + e.violatedDirective,
