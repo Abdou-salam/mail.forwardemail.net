@@ -145,6 +145,43 @@ describe('mergeMessagePages', () => {
     expect(mergeMessagePages([], [])).toEqual([]);
     expect(mergeMessagePages([{ id: 'a' }])).toEqual([{ id: 'a' }]);
   });
+
+  it('does not cap when max is omitted or non-positive', () => {
+    const existing = [{ id: 'a' }, { id: 'b' }];
+    const incoming = [{ id: 'c' }, { id: 'd' }];
+    const all = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }];
+    expect(mergeMessagePages(existing, incoming)).toEqual(all);
+    expect(mergeMessagePages(existing, incoming, 0)).toEqual(all);
+    expect(mergeMessagePages(existing, incoming, -5)).toEqual(all);
+  });
+
+  it('caps to the last `max` entries, dropping the head (newest, scrolled-past)', () => {
+    // existing = pages already loaded (head), incoming = the page just scrolled
+    // into view (tail). Capping keeps the tail window the user is looking at.
+    const existing = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+    const incoming = [{ id: 'd' }, { id: 'e' }];
+    expect(mergeMessagePages(existing, incoming, 2)).toEqual([{ id: 'd' }, { id: 'e' }]);
+    expect(mergeMessagePages(existing, incoming, 4)).toEqual([
+      { id: 'b' },
+      { id: 'c' },
+      { id: 'd' },
+      { id: 'e' },
+    ]);
+  });
+
+  it('does not cap when the merged length is within max', () => {
+    const existing = [{ id: 'a' }];
+    const incoming = [{ id: 'b' }];
+    expect(mergeMessagePages(existing, incoming, 5)).toEqual([{ id: 'a' }, { id: 'b' }]);
+  });
+
+  it('caps after de-duplication, not before', () => {
+    // 'b' is a duplicate, so the deduped merge is [a, b, c] (length 3); a cap of
+    // 2 then keeps the last two of the DEDUPED list.
+    const existing = [{ id: 'a' }, { id: 'b' }];
+    const incoming = [{ id: 'b' }, { id: 'c' }];
+    expect(mergeMessagePages(existing, incoming, 2)).toEqual([{ id: 'b' }, { id: 'c' }]);
+  });
 });
 
 describe('mergeMissingLabels', () => {

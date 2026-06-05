@@ -64,7 +64,15 @@ export const getMessageKey = (msg) => {
 // Merge two message-list pages, preserving order (existing first, then
 // incoming) and dropping duplicates by getMessageKey. Messages with no
 // derivable key are always kept (can't dedup what we can't identify).
-export const mergeMessagePages = (existing = [], incoming = []) => {
+//
+// `max` (optional, >0): bound the merged result to its last `max` entries by
+// dropping from the HEAD. Infinite scroll appends older pages at the tail, so
+// the head holds rows the user has scrolled well past; capping the live window
+// keeps the in-memory array — and the DOM rows derived from it — from growing
+// for the entire life of a folder session. The dropped head is restored by any
+// page-1 replace-load (folder reselect, refresh, filter change). `max <= 0`
+// (the default) means no cap.
+export const mergeMessagePages = (existing = [], incoming = [], max = 0) => {
   const merged = [];
   const seen = new Set();
   const append = (list) => {
@@ -81,6 +89,9 @@ export const mergeMessagePages = (existing = [], incoming = []) => {
   };
   append(existing);
   append(incoming);
+  if (max > 0 && merged.length > max) {
+    return merged.slice(-max);
+  }
   return merged;
 };
 

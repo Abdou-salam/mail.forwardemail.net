@@ -82,6 +82,16 @@ const EXPANDED_FOLDERS_KEY = 'folder_expansion_state';
 const FOLDERS_CACHE_TTL = 15000;
 const folderLoadState = new Map();
 
+// Sliding-window cap for the live in-memory message list. Infinite scroll
+// appends a page on every scroll-to-bottom (shouldAppend, below), so without a
+// bound both the `messages` array and the rendered DOM rows grow for the entire
+// life of a folder session — a real footprint creep on long-lived desktop
+// sessions. 1000 rows (~50 default pages of 20) is far past any normal scroll
+// while still bounding pathological sessions. Only the append path is capped;
+// page-1 replace-loads (folder reselect, refresh, filter change) restore the
+// full newest head.
+const MAX_LIVE_MESSAGES = 1000;
+
 // Optimistic-update trackers (pending deletes + flag mutations) live in
 // optimistic-trackers.ts so their reconciliation logic can be unit-tested.
 // Instantiated once here, then rebound to the original function names so every
@@ -703,7 +713,9 @@ const createMailboxStore = () => {
     const memCached = folderMessageCache.get(memKey);
     if (memCached?.messages?.length) {
       cachedPage = memCached.messages;
-      const nextMessages = shouldAppend ? mergeMessagePages(get(messages), cachedPage) : cachedPage;
+      const nextMessages = shouldAppend
+        ? mergeMessagePages(get(messages), cachedPage, MAX_LIVE_MESSAGES)
+        : cachedPage;
       messages.set(applyPendingFlagMutations(filterPendingDeletes(nextMessages)));
       hasNextPage.set(memCached.hasNextPage);
       loading.set(false);
@@ -759,7 +771,7 @@ const createMailboxStore = () => {
           // a redundant messages.set() that causes visible flicker during sync.
           if (!memCached?.messages?.length) {
             const nextCached = shouldAppend
-              ? mergeMessagePages(get(messages), cachedPage)
+              ? mergeMessagePages(get(messages), cachedPage, MAX_LIVE_MESSAGES)
               : cachedPage;
             messages.set(applyPendingFlagMutations(filterPendingDeletes(nextCached)));
             loading.set(false);
@@ -931,7 +943,9 @@ const createMailboxStore = () => {
           const activeNow = Local.get('email') || 'default';
           if (activeNow !== account) return;
           if (get(selectedFolder) !== folder) return;
-          const nextPreview = shouldAppend ? mergeMessagePages(get(messages), mapped) : mapped;
+          const nextPreview = shouldAppend
+            ? mergeMessagePages(get(messages), mapped, MAX_LIVE_MESSAGES)
+            : mapped;
           messages.set(applyPendingFlagMutations(filterPendingDeletes(nextPreview)));
           loading.set(false);
           if (
@@ -1060,7 +1074,9 @@ const createMailboxStore = () => {
       const shouldPrune = !shouldAppend && cachedPage.length && merged.length;
 
       if (!isStaleRequest) {
-        const nextMessages = shouldAppend ? mergeMessagePages(get(messages), merged) : merged;
+        const nextMessages = shouldAppend
+          ? mergeMessagePages(get(messages), merged, MAX_LIVE_MESSAGES)
+          : merged;
         messages.set(applyPendingFlagMutations(filterPendingDeletes(nextMessages)));
         if (
           allowAutoSelect &&
