@@ -5,6 +5,7 @@ import { Local } from '../utils/storage.js';
 import { sanitizeHtml } from '../utils/sanitize.js';
 import { formatFriendlyDate } from '../utils/date.ts';
 import { createPerfTracer } from '../utils/perf-logger.ts';
+import { DARK_SURFACE } from '../utils/dark-surface.ts';
 import { abortIfNeeded, getMessageApiId } from '../utils/sync-helpers.ts';
 import {
   sendSyncRequest,
@@ -1729,9 +1730,10 @@ function createPgpModal({
     dialog.style.border = '1px solid #e5e7eb';
     dialog.style.color = '#0f172a';
   } else {
-    dialog.style.background = '#0b1220';
-    dialog.style.border = '1px solid #1f2937';
-    dialog.style.color = '#e5e7eb';
+    // Neutral dark surfaces mirroring tokens.css (.dark) — see dark-surface.ts.
+    dialog.style.background = DARK_SURFACE.overlay;
+    dialog.style.border = `1px solid ${DARK_SURFACE.border}`;
+    dialog.style.color = DARK_SURFACE.text;
   }
 
   dialog.style.borderRadius = '12px';
@@ -1740,8 +1742,8 @@ function createPgpModal({
   dialog.style.width = '96%';
   dialog.style.boxShadow = '0 30px 80px rgba(0, 0, 0, 0.4)';
 
-  const headingColor = isLightMode ? '#0f172a' : '#e5e7eb';
-  const textColor = isLightMode ? '#334155' : '#cbd5e1';
+  const headingColor = isLightMode ? '#0f172a' : DARK_SURFACE.text;
+  const textColor = isLightMode ? '#334155' : DARK_SURFACE.textSubtle;
 
   dialog.innerHTML = `
     <h3 style="margin-top:0; color: ${headingColor}; font-size: 18px; font-weight: 600;">PGP encrypted message detected</h3>

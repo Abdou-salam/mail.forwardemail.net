@@ -24,6 +24,7 @@ import {
 } from './settingsStore';
 import { normalizeLayoutMode } from './settingsRegistry';
 import { getMessageApiId } from '../utils/sync-helpers';
+import { DARK_SURFACE } from '../utils/dark-surface';
 import { startInitialSync, queueBodiesForFolder } from '../utils/sync-controller';
 import { resetSyncWorkerReady } from '../utils/sync-worker-client.js';
 import { isDemoMode } from '../utils/demo-mode';
@@ -2070,15 +2071,18 @@ const buildOriginalViewerPage = ({
   isLightMode = true,
 }) => {
   const filename = getSafeFilename(subject, 'eml');
+  // Neutral dark surfaces mirroring tokens.css (.dark) — see dark-surface.ts.
+  // Elevation preserved: page (surface) < header (panel) < buttons (overlay),
+  // with the raw <pre> inset to the deepest base.
   const darkModeStyles = !isLightMode
     ? `
-    body { background: #0f172a; color: #e2e8f0; }
-    header { background: #111827; border-bottom: 1px solid rgba(255,255,255,0.05); }
-    button { background: #1f2937; color: #e5e7eb; border: 1px solid rgba(255,255,255,0.08); }
-    button:hover { background: #273449; }
-    .label { color: #94a3b8; }
-    pre { background: #0b1220; border: 1px solid rgba(255,255,255,0.05); }
-    .toast { background: #1f2937; border: 1px solid rgba(255,255,255,0.1); color: #e2e8f0; }
+    body { background: ${DARK_SURFACE.surface}; color: ${DARK_SURFACE.text}; }
+    header { background: ${DARK_SURFACE.panel}; border-bottom: 1px solid rgba(255,255,255,0.05); }
+    button { background: ${DARK_SURFACE.overlay}; color: ${DARK_SURFACE.text}; border: 1px solid rgba(255,255,255,0.08); }
+    button:hover { background: ${DARK_SURFACE.border}; }
+    .label { color: ${DARK_SURFACE.textMuted}; }
+    pre { background: ${DARK_SURFACE.base}; border: 1px solid rgba(255,255,255,0.05); }
+    .toast { background: ${DARK_SURFACE.overlay}; border: 1px solid rgba(255,255,255,0.1); color: ${DARK_SURFACE.text}; }
   `
     : '';
 

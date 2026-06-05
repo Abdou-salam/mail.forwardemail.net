@@ -8,6 +8,8 @@
  * is present. An external `'self'` script is immune to that interaction.
  */
 
+import { DARK_SURFACE } from './dark-surface';
+
 const SCRIPT_URL = '/email-iframe.js';
 
 function parentOrigin(): string {
@@ -202,25 +204,27 @@ function getAppearanceStyles(): string {
       color: #6b7280 !important;
     }
 
-    /* Dark mode - dark background with light text */
+    /* Dark mode — neutral grey surfaces mirroring tokens.css (.dark) so the
+       email body matches the reader pane (--color-panel) instead of the old
+       blue slate. See src/utils/dark-surface.ts. */
     body.fe-iframe-dark {
-      background: #0f172a !important;
-      color: #e2e8f0 !important;
+      background: ${DARK_SURFACE.panel} !important;
+      color: ${DARK_SURFACE.text} !important;
     }
 
     /* Force dark mode colors on ALL elements */
     body.fe-iframe-dark * {
-      color: #e2e8f0 !important;
+      color: ${DARK_SURFACE.text} !important;
       background-color: transparent !important;
-      border-color: #334155 !important;
+      border-color: ${DARK_SURFACE.border} !important;
     }
 
     /* Preserve quote toggle button styling */
     body.fe-iframe-dark .fe-quote-toggle,
     body.fe-iframe-dark .fe-quote-dots,
     body.fe-iframe-dark .fe-quote-label {
-      color: #94a3b8 !important;
-      background: #1e293b !important;
+      color: ${DARK_SURFACE.textMuted} !important;
+      background: ${DARK_SURFACE.overlay} !important;
     }
 
     /* Slightly dimmer text for secondary content */
@@ -231,30 +235,30 @@ function getAppearanceStyles(): string {
     body.fe-iframe-dark small,
     body.fe-iframe-dark .text-muted,
     body.fe-iframe-dark code {
-      color: #94a3b8 !important;
+      color: ${DARK_SURFACE.textMuted} !important;
     }
 
     body.fe-iframe-dark a,
     body.fe-iframe-dark a * {
-      color: #60a5fa !important;
+      color: ${DARK_SURFACE.link} !important;
     }
 
     body.fe-iframe-dark blockquote,
     body.fe-iframe-dark blockquote * {
-      color: #94a3b8 !important;
-      border-left-color: #475569 !important;
+      color: ${DARK_SURFACE.textMuted} !important;
+      border-left-color: ${DARK_SURFACE.borderStrong} !important;
     }
 
     body.fe-iframe-dark table,
     body.fe-iframe-dark th,
     body.fe-iframe-dark td,
     body.fe-iframe-dark tr {
-      border-color: #334155 !important;
+      border-color: ${DARK_SURFACE.border} !important;
       background-color: transparent !important;
     }
 
     body.fe-iframe-dark hr {
-      border-color: #334155 !important;
+      border-color: ${DARK_SURFACE.border} !important;
     }
 
     /* Ensure images are visible (don't invert them) */
@@ -292,14 +296,14 @@ function getQuoteToggleStyles(): string {
     }
 
     body.fe-iframe-dark .fe-quote-toggle {
-      background: #1e293b !important;
-      border-color: #334155;
-      color: #94a3b8 !important;
+      background: ${DARK_SURFACE.overlay} !important;
+      border-color: ${DARK_SURFACE.border};
+      color: ${DARK_SURFACE.textMuted} !important;
     }
 
     body.fe-iframe-dark .fe-quote-toggle:hover {
-      background: #334155 !important;
-      color: #cbd5e1 !important;
+      background: ${DARK_SURFACE.border} !important;
+      color: ${DARK_SURFACE.textSubtle} !important;
     }
 
     .fe-quote-dots {
