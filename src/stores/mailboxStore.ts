@@ -72,6 +72,7 @@ import {
   mergeMessagePages,
   mergeMissingLabels,
   mergeMissingFrom,
+  resolveHasMoreAfterFetch,
 } from './mailbox-store-helpers';
 import { createPendingDeleteTracker, createPendingFlagTracker } from './optimistic-trackers';
 
@@ -986,8 +987,22 @@ const createMailboxStore = () => {
       }
       const list =
         source === 'worker' ? res?.messages || [] : res?.Result?.List || res?.Result || res || [];
-      const hasMore =
-        source === 'worker' ? res?.hasNextPage : Array.isArray(list) && list.length >= limit;
+      // Keep infinite scroll alive while the server still has more than we've
+      // paged, not just while the last fetched page looked full — otherwise a
+      // short first server page strands the rest of a large folder (the
+      // "stuck at ~47" desktop bug). Mirrors the cache-read path above.
+      const folderRec = get(folders).find(
+        (f) => f.path?.toUpperCase?.() === folder?.toUpperCase?.(),
+      );
+      const serverTotal = Number.isFinite(folderRec?.totalCount) ? folderRec.totalCount : null;
+      const hasMore = resolveHasMoreAfterFetch({
+        source,
+        workerHasNextPage: res?.hasNextPage,
+        listLength: Array.isArray(list) ? list.length : 0,
+        limit,
+        page: currentPage,
+        serverTotal,
+      });
       if (!isStaleRequest) {
         hasNextPage.set(Boolean(hasMore));
       }
@@ -1324,8 +1339,9 @@ const createMailboxStore = () => {
   };
 
   const getTrashFolderPath = () => {
-    // Check if user has set a custom trash folder
-    const customFolder = Local.get('trash_folder');
+    // Check if user has set an account-specific custom trash folder
+    const currentAcct = Local.get('email') || 'default';
+    const customFolder = getEffectiveSettingValue('trash_folder', { account: currentAcct });
     if (customFolder) {
       return customFolder;
     }
@@ -2282,6 +2298,13 @@ const createMailboxStore = () => {
    * Get the spam/junk folder path
    */
   const getSpamFolderPath = () => {
+    // Check if user has set an account-specific custom junk folder
+    const currentAcct = Local.get('email') || 'default';
+    const customFolder = getEffectiveSettingValue('junk_folder', { account: currentAcct });
+    if (customFolder) {
+      return customFolder;
+    }
+
     const list = get(folders) || [];
 
     // Strongest signal: IMAP specialUse flag

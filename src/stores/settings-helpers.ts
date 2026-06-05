@@ -12,6 +12,8 @@ export interface RemoteSettings {
     archive_folder: string | null;
     sent_folder: string | null;
     drafts_folder: string | null;
+    trash_folder: string | null;
+    junk_folder: string | null;
   };
   labels: Label[];
   aliases: {
@@ -33,6 +35,8 @@ export interface AccountResponse {
       archive_folder?: string | null;
       sent_folder?: string | null;
       drafts_folder?: string | null;
+      trash_folder?: string | null;
+      junk_folder?: string | null;
     };
     aliases?: {
       defaults?: Record<string, unknown>;
@@ -44,6 +48,8 @@ export interface AccountResponse {
   mail_archive_folder?: string | null;
   mail_sent_folder?: string | null;
   mail_drafts_folder?: string | null;
+  mail_trash_folder?: string | null;
+  mail_junk_folder?: string | null;
 }
 
 export interface SettingsChanges {
@@ -51,6 +57,8 @@ export interface SettingsChanges {
     archive_folder?: string | null;
     sent_folder?: string | null;
     drafts_folder?: string | null;
+    trash_folder?: string | null;
+    junk_folder?: string | null;
   };
   labels?: Label[];
   aliases?: {
@@ -67,6 +75,8 @@ export const DEFAULT_REMOTE_SETTINGS: RemoteSettings = {
     archive_folder: null,
     sent_folder: null,
     drafts_folder: null,
+    trash_folder: null,
+    junk_folder: null,
   },
   labels: [],
   aliases: {
@@ -144,6 +154,8 @@ export function extractSettingsFromAccount(response: AccountResponse = {}): Remo
       archive_folder: mail.archive_folder ?? response.mail_archive_folder ?? null,
       sent_folder: mail.sent_folder ?? response.mail_sent_folder ?? null,
       drafts_folder: mail.drafts_folder ?? response.mail_drafts_folder ?? null,
+      trash_folder: mail.trash_folder ?? response.mail_trash_folder ?? null,
+      junk_folder: mail.junk_folder ?? response.mail_junk_folder ?? null,
     },
     labels,
     aliases: {
@@ -170,6 +182,12 @@ export function buildAccountUpdatePayload(changes: SettingsChanges = {}): {
     }
     if (changes.mail.drafts_folder !== undefined) {
       mail.drafts_folder = changes.mail.drafts_folder;
+    }
+    if (changes.mail.trash_folder !== undefined) {
+      mail.trash_folder = changes.mail.trash_folder;
+    }
+    if (changes.mail.junk_folder !== undefined) {
+      mail.junk_folder = changes.mail.junk_folder;
     }
     if (Object.keys(mail).length) {
       payload.settings.mail = mail;

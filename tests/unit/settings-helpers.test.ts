@@ -131,6 +131,8 @@ describe('extractSettingsFromAccount', () => {
       archive_folder: 'Archive',
       sent_folder: 'Sent',
       drafts_folder: 'Drafts',
+      trash_folder: null,
+      junk_folder: null,
     });
     expect(out.aliases.defaults).toEqual({ signature: 'hi' });
     expect(out.labels).toHaveLength(1);
@@ -142,7 +144,13 @@ describe('extractSettingsFromAccount', () => {
       mail_sent_folder: 'S',
       mail_drafts_folder: 'D',
     });
-    expect(out.mail).toEqual({ archive_folder: 'A', sent_folder: 'S', drafts_folder: 'D' });
+    expect(out.mail).toEqual({
+      archive_folder: 'A',
+      sent_folder: 'S',
+      drafts_folder: 'D',
+      trash_folder: null,
+      junk_folder: null,
+    });
   });
 
   it('derives labels from label_settings map when no labels array is present', () => {
@@ -160,7 +168,13 @@ describe('extractSettingsFromAccount', () => {
 
   it('defaults to null folders / empty aliases for an empty response', () => {
     const out = extractSettingsFromAccount();
-    expect(out.mail).toEqual({ archive_folder: null, sent_folder: null, drafts_folder: null });
+    expect(out.mail).toEqual({
+      archive_folder: null,
+      sent_folder: null,
+      drafts_folder: null,
+      trash_folder: null,
+      junk_folder: null,
+    });
     expect(out.aliases.defaults).toEqual({});
     expect(out.labels).toEqual([]);
   });
@@ -174,6 +188,18 @@ describe('buildAccountUpdatePayload', () => {
     // null is a real value (clear the folder) and must be kept
     expect(buildAccountUpdatePayload({ mail: { sent_folder: null } })).toEqual({
       settings: { mail: { sent_folder: null } },
+    });
+  });
+
+  it('threads trash_folder and junk_folder through the mail payload', () => {
+    expect(
+      buildAccountUpdatePayload({ mail: { trash_folder: 'Bin', junk_folder: 'Spam' } }),
+    ).toEqual({
+      settings: { mail: { trash_folder: 'Bin', junk_folder: 'Spam' } },
+    });
+    // clearing back to auto-detect is a real null, not a dropped key
+    expect(buildAccountUpdatePayload({ mail: { junk_folder: null } })).toEqual({
+      settings: { mail: { junk_folder: null } },
     });
   });
 

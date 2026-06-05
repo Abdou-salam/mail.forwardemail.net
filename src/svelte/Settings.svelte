@@ -168,6 +168,8 @@
   let archiveFolder = $state('');
   let sentFolder = $state('');
   let draftsFolder = $state('');
+  let trashFolder = $state('');
+  let junkFolder = $state('');
   let availableFolders = $state<string[]>([]);
   let aliasEmail = $state('');
   let activeEmail = $state('');
@@ -610,6 +612,8 @@
     archiveFolder = getEffectiveSettingValue('archive_folder', { account: currentAcct }) || '';
     sentFolder = getEffectiveSettingValue('sent_folder', { account: currentAcct }) || '';
     draftsFolder = getEffectiveSettingValue('drafts_folder', { account: currentAcct }) || '';
+    trashFolder = getEffectiveSettingValue('trash_folder', { account: currentAcct }) || '';
+    junkFolder = getEffectiveSettingValue('junk_folder', { account: currentAcct }) || '';
     bodyIndexingLocal = Boolean(
       getEffectiveSettingValue('search_body_indexing', { account: currentAcct }),
     );
@@ -1112,6 +1116,24 @@
       toasts?.show?.('Drafts folder updated', 'success');
     } catch (err) {
       toasts?.show?.((err as Error)?.message || 'Failed to save drafts folder', 'error');
+    }
+  };
+
+  const saveTrashFolder = async () => {
+    try {
+      await setSettingValue('trash_folder', trashFolder || null, { account: getAccountId() });
+      toasts?.show?.('Trash folder updated', 'success');
+    } catch (err) {
+      toasts?.show?.((err as Error)?.message || 'Failed to save trash folder', 'error');
+    }
+  };
+
+  const saveJunkFolder = async () => {
+    try {
+      await setSettingValue('junk_folder', junkFolder || null, { account: getAccountId() });
+      toasts?.show?.('Junk folder updated', 'success');
+    } catch (err) {
+      toasts?.show?.((err as Error)?.message || 'Failed to save junk folder', 'error');
     }
   };
 
@@ -2008,7 +2030,8 @@
           <Card.Header>
             <Card.Title>Special Folders</Card.Title>
             <Card.Description
-              >Configure which folders to use for archiving, sending, and drafting messages.</Card.Description
+              >Configure which folders to use for archiving, sending, drafting, trashing, and junk
+              messages.</Card.Description
             >
           </Card.Header>
           <Card.Content class="space-y-4">
@@ -2060,6 +2083,42 @@
                 </Select.Trigger>
                 <Select.Content>
                   <Select.Item value="">Auto-detect (Drafts)</Select.Item>
+                  {#each availableFolders as folder}
+                    <Select.Item value={folder}>{folder}</Select.Item>
+                  {/each}
+                </Select.Content>
+              </Select.Root>
+            </div>
+            <div class="space-y-2">
+              <Label for="trash-folder">Trash folder</Label>
+              <Select.Root
+                type="single"
+                bind:value={trashFolder}
+                onValueChange={() => saveTrashFolder()}
+              >
+                <Select.Trigger class="w-full">
+                  {trashFolder || 'Auto-detect (Trash)'}
+                </Select.Trigger>
+                <Select.Content>
+                  <Select.Item value="">Auto-detect (Trash)</Select.Item>
+                  {#each availableFolders as folder}
+                    <Select.Item value={folder}>{folder}</Select.Item>
+                  {/each}
+                </Select.Content>
+              </Select.Root>
+            </div>
+            <div class="space-y-2">
+              <Label for="junk-folder">Junk folder</Label>
+              <Select.Root
+                type="single"
+                bind:value={junkFolder}
+                onValueChange={() => saveJunkFolder()}
+              >
+                <Select.Trigger class="w-full">
+                  {junkFolder || 'Auto-detect (Junk)'}
+                </Select.Trigger>
+                <Select.Content>
+                  <Select.Item value="">Auto-detect (Junk)</Select.Item>
                   {#each availableFolders as folder}
                     <Select.Item value={folder}>{folder}</Select.Item>
                   {/each}
