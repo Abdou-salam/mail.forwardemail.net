@@ -5,6 +5,8 @@
 // Keep them side-effect-free — anything touching the network, disk, DOM, or
 // store state belongs back in mailService.ts.
 
+import type { Attachment } from '../types';
+
 /**
  * Trim a raw body down to just its inline PGP MESSAGE block. Returns the input
  * unchanged when no complete armor block is present.
@@ -160,4 +162,75 @@ export function contentToBytes(content: unknown): Uint8Array | null {
     return new TextEncoder().encode(content);
   }
   return null;
+}
+
+/** sessionStorage key for the per-account "PGP key missing" dismissed flag. */
+export function getPgpDismissKey(account: string): string {
+  return `pgp_modal_dismissed_${account || 'default'}`;
+}
+
+/**
+ * Combine two AbortSignals into one that aborts when either does. Uses native
+ * AbortSignal.any when available, else wires one-shot listeners manually.
+ */
+export function composeAbortSignals(a: AbortSignal, b: AbortSignal): AbortSignal {
+  if ('any' in AbortSignal) {
+    return (AbortSignal as unknown as { any(signals: AbortSignal[]): AbortSignal }).any([a, b]);
+  }
+  const controller = new AbortController();
+  if (a.aborted || b.aborted) {
+    controller.abort();
+    return controller.signal;
+  }
+  const onAbort = () => controller.abort();
+  a.addEventListener('abort', onAbort, { once: true });
+  b.addEventListener('abort', onAbort, { once: true });
+  return controller.signal;
+}
+
+/**
+ * Build a fallback filename for an attachment with no name, derived from its
+ * content-id (preferred) or content type. Pure.
+ */
+export function generateAttachmentName(att: Record<string, unknown>): string {
+  const contentType = (att.contentType || att.mimeType || att.type || '') as string;
+  const ext = contentType.split('/')[1]?.split(';')[0] || 'bin';
+  const cid = (att.contentId || att.cid || '') as string;
+  if (cid) {
+    const cleaned = cid.replace(/^<|>$/g, '').split('@')[0];
+    if (cleaned) return `${cleaned}.${ext}`;
+  }
+  return `attachment.${ext}`;
+}
+
+/**
+ * Normalize a raw attachment list (from the API or cache) into the app's
+ * Attachment shape, dropping entries with no resolvable name. Pure transform.
+ */
+export function sanitizeAttachments(list: unknown[]): Attachment[] {
+  if (!Array.isArray(list)) return [];
+  return list
+    .map((att: unknown) => {
+      const a = att as Record<string, unknown>;
+      const name = (a.name || a.filename) as string;
+      const fallbackName = name || generateAttachmentName(a);
+      return {
+        name: fallbackName,
+        filename: (a.filename || a.name || fallbackName) as string,
+        size: (a.size || 0) as number,
+        contentId: (a.contentId || a.cid) as string | undefined,
+        disposition: (a.disposition || '') as string,
+        href:
+          a.href ||
+          (typeof a.content === 'string' && (a.content as string).startsWith('data:')
+            ? a.content
+            : undefined),
+        contentType: (a.contentType ||
+          a.mimeType ||
+          a.type ||
+          'application/octet-stream') as string,
+        needsDownload: (a.needsDownload || false) as boolean,
+      } as Attachment;
+    })
+    .filter((a) => a.name);
 }

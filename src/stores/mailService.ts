@@ -31,6 +31,9 @@ import {
   buildSaveDialogFilters,
   bytesFromDataUrl,
   contentToBytes,
+  getPgpDismissKey,
+  composeAbortSignals,
+  sanitizeAttachments,
 } from './mail-service-helpers';
 
 export interface MessageDetailCallbacks {
@@ -355,13 +358,6 @@ async function triggerDownloadTauri(href: string, filename: string): Promise<voi
   }
 }
 
-function isCachedBodyComplete(cached: CachedBody | undefined): boolean {
-  if (!cached?.body) return false;
-  // Stale PGP bodies (raw MIME stored as body) are not complete
-  if (typeof cached.body === 'string' && isPgpEncrypted(cached.body)) return false;
-  return true;
-}
-
 let passphraseModalRef: PassphraseModalRef | null = null;
 const pendingPassphraseModalWaiters = new Set<(modal: PassphraseModalRef | null) => void>();
 const passphraseCache = new Map<string, string>();
@@ -383,21 +379,6 @@ function getAccountSignal(): AbortSignal {
     accountAbortController = new AbortController();
   }
   return accountAbortController.signal;
-}
-
-function composeAbortSignals(a: AbortSignal, b: AbortSignal): AbortSignal {
-  if ('any' in AbortSignal) {
-    return (AbortSignal as unknown as { any(signals: AbortSignal[]): AbortSignal }).any([a, b]);
-  }
-  const controller = new AbortController();
-  if (a.aborted || b.aborted) {
-    controller.abort();
-    return controller.signal;
-  }
-  const onAbort = () => controller.abort();
-  a.addEventListener('abort', onAbort, { once: true });
-  b.addEventListener('abort', onAbort, { once: true });
-  return controller.signal;
 }
 
 function pruneRecentCacheHits(): void {
@@ -430,8 +411,6 @@ function withTimeout<T>(promise: Promise<T>, ms: number, operation = 'Operation'
 }
 
 // Check if user has dismissed PGP modal in this session
-const getPgpDismissKey = (account: string): string => `pgp_modal_dismissed_${account || 'default'}`;
-
 function hasDismissedPgpModal(account: string): boolean {
   try {
     const dismissed = sessionStorage.getItem(getPgpDismissKey(account));
@@ -698,18 +677,6 @@ async function handleCachedPgpRaw(
  * Calculate priority score for prefetch ordering.
  * Higher score = prefetch first.
  */
-function calculatePrefetchPriority(msg: Message, folder: string): number {
-  let score = 0;
-  if (msg.is_unread) score += 100;
-  if (folder?.toUpperCase() === 'INBOX') score += 50;
-  const ageMs = Date.now() - (msg.date || 0);
-  const ageDays = ageMs / (1000 * 60 * 60 * 24);
-  if (ageDays < 1) score += 40;
-  else if (ageDays < 7) score += 20;
-  if (msg.has_attachment) score += 10;
-  return score;
-}
-
 export const mailService = {
   setPassphraseModal(modal: PassphraseModalRef): void {
     passphraseModalRef = modal;
@@ -1417,76 +1384,6 @@ export const mailService = {
     }
   },
 
-  async prefetchBodies(
-    messages: Message[] = [],
-    options: { limit?: number; concurrency?: number; folder?: string; prioritize?: boolean } = {},
-  ): Promise<void> {
-    const enabledRaw = Local.get('cache_prefetch_enabled');
-    if (enabledRaw === 'false') {
-      return;
-    }
-
-    const account = Local.get('email') || 'default';
-    const limit = Math.max(1, options.limit || 50);
-    const concurrency = Math.max(1, options.concurrency || 3);
-    const folder = options.folder || '';
-    const prioritize = options.prioritize ?? true;
-    let list = Array.isArray(messages) ? [...messages] : [];
-
-    if (!list.length) return;
-
-    if (await shouldThrottleForQuota()) {
-      debugWarn('[mailService] Prefetch skipped due to quota pressure');
-      return;
-    }
-
-    // Priority sorting for prefetch
-    if (prioritize && list.length > 1) {
-      list = list
-        .map((msg) => ({ msg, score: calculatePrefetchPriority(msg, folder) }))
-        .sort((a, b) => b.score - a.score)
-        .slice(0, limit)
-        .map((p) => p.msg);
-    } else {
-      list = list.slice(0, limit);
-    }
-
-    // Collect messages with valid API IDs
-    const msgsWithIds = list
-      .map((msg) => {
-        const apiId = getMessageApiId(msg);
-        return apiId ? { msg, apiId } : null;
-      })
-      .filter((item): item is { msg: Message; apiId: string } => item !== null);
-
-    if (!msgsWithIds.length) return;
-
-    // Bulk fetch all cached bodies in a single query (instead of N+1 queries)
-    const keys = msgsWithIds.map(({ apiId }) => [account, apiId]);
-    let cachedBodies: (CachedBody | undefined)[] = [];
-    try {
-      cachedBodies = (await db.messageBodies.bulkGet(keys)) as (CachedBody | undefined)[];
-    } catch {
-      // If bulk fetch fails, treat all as uncached
-      cachedBodies = new Array(msgsWithIds.length).fill(undefined);
-    }
-
-    // Find messages that need fetching (not cached or incomplete)
-    const pending: Message[] = msgsWithIds
-      .filter((_, i) => !isCachedBodyComplete(cachedBodies[i]))
-      .map(({ msg, apiId }) => ({ ...msg, id: apiId, uid: msg.uid || msg.id }));
-
-    if (!pending.length) return;
-
-    await runWithConcurrency(pending, concurrency, async (msg) => {
-      try {
-        await mailService.loadMessageDetail(msg, { allowPgpPrompt: false });
-      } catch (err) {
-        debugWarn('[mailService] Prefetch body failed', err);
-      }
-    });
-  },
-
   async downloadAttachment(attachment: Attachment, message: Message): Promise<void> {
     if (!attachment) return;
 
@@ -1668,35 +1565,6 @@ async function cacheMessageContent(
   }
 }
 
-async function shouldThrottleForQuota(): Promise<boolean> {
-  try {
-    const estimate = await navigator.storage?.estimate?.();
-    if (!estimate) return false;
-    const usage = estimate.usage || 0;
-    const quota = estimate.quota || 0;
-    const pct = quota ? usage / quota : 0;
-    return pct >= 0.9;
-  } catch {
-    return false;
-  }
-}
-
-async function runWithConcurrency<T>(
-  items: T[],
-  limit: number,
-  handler: (item: T) => Promise<void>,
-): Promise<void> {
-  const queue = Array.isArray(items) ? [...items] : [];
-  const workerCount = Math.max(1, Math.min(limit || 1, queue.length));
-  const workers = Array.from({ length: workerCount }, async () => {
-    while (queue.length) {
-      const item = queue.shift();
-      if (item) await handler(item);
-    }
-  });
-  await Promise.all(workers);
-}
-
 function createPgpModal({
   onConfirm,
   onClose,
@@ -1781,45 +1649,6 @@ function createPgpModal({
   document.body.appendChild(overlay);
 
   return cleanup;
-}
-
-function generateAttachmentName(att: Record<string, unknown>): string {
-  const contentType = (att.contentType || att.mimeType || att.type || '') as string;
-  const ext = contentType.split('/')[1]?.split(';')[0] || 'bin';
-  const cid = (att.contentId || att.cid || '') as string;
-  if (cid) {
-    const cleaned = cid.replace(/^<|>$/g, '').split('@')[0];
-    if (cleaned) return `${cleaned}.${ext}`;
-  }
-  return `attachment.${ext}`;
-}
-
-function sanitizeAttachments(list: unknown[]): Attachment[] {
-  if (!Array.isArray(list)) return [];
-  return list
-    .map((att: unknown) => {
-      const a = att as Record<string, unknown>;
-      const name = (a.name || a.filename) as string;
-      const fallbackName = name || generateAttachmentName(a);
-      return {
-        name: fallbackName,
-        filename: (a.filename || a.name || fallbackName) as string,
-        size: (a.size || 0) as number,
-        contentId: (a.contentId || a.cid) as string | undefined,
-        disposition: (a.disposition || '') as string,
-        href:
-          a.href ||
-          (typeof a.content === 'string' && (a.content as string).startsWith('data:')
-            ? a.content
-            : undefined),
-        contentType: (a.contentType ||
-          a.mimeType ||
-          a.type ||
-          'application/octet-stream') as string,
-        needsDownload: (a.needsDownload || false) as boolean,
-      } as Attachment;
-    })
-    .filter((a) => a.name);
 }
 
 async function getStoredKeys(): Promise<PgpKey[]> {
