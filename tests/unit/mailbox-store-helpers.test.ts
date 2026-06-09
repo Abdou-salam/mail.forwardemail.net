@@ -8,6 +8,15 @@ import {
   mergeMissingLabels,
   mergeMissingFrom,
   resolveHasMoreAfterFetch,
+  isNoContentResponse,
+  extractMessageList,
+  mapServerMessage,
+  sortParamForOrder,
+  buildMessageListRequestKey,
+  buildMessageListParams,
+  shouldKeepCacheOnEmpty,
+  computePrunedIds,
+  isStaleListRequest,
 } from '../../src/stores/mailbox-store-helpers';
 
 // Mock bulkGet: returns the cached record for each [account, key] tuple in the
@@ -356,5 +365,306 @@ describe('resolveHasMoreAfterFetch', () => {
         serverTotal: 80,
       }),
     ).toBe(true);
+  });
+});
+
+describe('isNoContentResponse', () => {
+  it('flags a worker no-content response only via the flag', () => {
+    expect(isNoContentResponse('worker', { noContent: true })).toBe(true);
+    expect(isNoContentResponse('worker', { messages: [] })).toBe(false);
+    expect(isNoContentResponse('worker', { noContent: false })).toBe(false);
+    // a null worker body is NOT no-content (only the flag is)
+    expect(isNoContentResponse('worker', null)).toBe(false);
+  });
+
+  it('flags a null/undefined main-thread body only', () => {
+    expect(isNoContentResponse('main', null)).toBe(true);
+    expect(isNoContentResponse('main', undefined)).toBe(true);
+    expect(isNoContentResponse('main', {})).toBe(false);
+    // the worker flag is not special-cased on the main path
+    expect(isNoContentResponse('main', { noContent: true })).toBe(false);
+  });
+});
+
+describe('extractMessageList', () => {
+  it('reads the worker messages array', () => {
+    expect(extractMessageList('worker', { messages: [{ id: 1 }] })).toEqual([{ id: 1 }]);
+    expect(extractMessageList('worker', {})).toEqual([]);
+  });
+
+  it('reads the main-thread envelope in priority order (Result.List > Result > body)', () => {
+    expect(extractMessageList('main', { Result: { List: [{ id: 1 }] } })).toEqual([{ id: 1 }]);
+    expect(extractMessageList('main', { Result: [{ id: 2 }] })).toEqual([{ id: 2 }]);
+    expect(extractMessageList('main', [{ id: 3 }])).toEqual([{ id: 3 }]);
+    expect(extractMessageList('main', null)).toEqual([]);
+  });
+
+  it('coerces a truthy non-array (malformed) response to [] so the main loop never throws', () => {
+    // Without coercion these return a non-array verbatim and loadMessages'
+    // main-path `for (const m of list)` throws on it.
+    expect(extractMessageList('main', { unexpected: 'shape' })).toEqual([]);
+    expect(extractMessageList('main', { Result: { notAList: true } })).toEqual([]);
+    expect(extractMessageList('worker', { messages: { not: 'an array' } })).toEqual([]);
+  });
+});
+
+describe('mapServerMessage', () => {
+  // Injected subject normalizer — distinct output so we can assert it ran.
+  const ns = (s: string) => `norm:${s}`;
+
+  it('returns null for a record with no id', () => {
+    expect(mapServerMessage({ account: 'a', subject: 'x' }, 'INBOX', 'a', ns)).toBeNull();
+  });
+
+  it('uses an already-normalized record (carries account) as-is and layers fields', () => {
+    const out = mapServerMessage(
+      { account: 'a', id: '1', subject: 'Hi', thread_id: 't1' },
+      'INBOX',
+      'a',
+      ns,
+    );
+    expect(out).toMatchObject({
+      id: '1',
+      subject: 'Hi',
+      normalizedSubject: 'norm:Hi',
+      pending: false,
+      threadId: 't1',
+      in_reply_to: null,
+      references: null,
+    });
+  });
+
+  it('keeps an existing normalizedSubject instead of recomputing', () => {
+    const out = mapServerMessage(
+      { account: 'a', id: '1', subject: 'Hi', normalizedSubject: 'precomputed' },
+      'INBOX',
+      'a',
+      ns,
+    );
+    expect(out.normalizedSubject).toBe('precomputed');
+  });
+
+  it('prefers raw threadId aliases over normalized.thread_id', () => {
+    const at = (raw: Record<string, unknown>) => mapServerMessage(raw, 'F', 'a', ns).threadId;
+    expect(at({ account: 'a', id: '1', threadId: 'A', thread_id: 'B' })).toBe('A');
+    expect(at({ account: 'a', id: '1', ThreadId: 'C', thread_id: 'B' })).toBe('C');
+    expect(at({ account: 'a', id: '1', thread_id: 'B' })).toBe('B');
+  });
+
+  it('resolves in_reply_to through the full header fallback chain', () => {
+    const ir = (raw: Record<string, unknown>) => mapServerMessage(raw, 'F', 'a', ns).in_reply_to;
+    expect(ir({ account: 'a', id: '1', in_reply_to: 'norm', inReplyTo: 'x' })).toBe('norm');
+    expect(ir({ account: 'a', id: '1', inReplyTo: 'camel' })).toBe('camel');
+    expect(ir({ account: 'a', id: '1', 'In-Reply-To': 'hdr' })).toBe('hdr');
+    expect(ir({ account: 'a', id: '1', nodemailer: { headers: { 'in-reply-to': 'nm' } } })).toBe(
+      'nm',
+    );
+    expect(ir({ account: 'a', id: '1' })).toBeNull();
+  });
+
+  it('resolves references through the full header fallback chain', () => {
+    const rf = (raw: Record<string, unknown>) => mapServerMessage(raw, 'F', 'a', ns).references;
+    expect(rf({ account: 'a', id: '1', references: 'r' })).toBe('r');
+    expect(rf({ account: 'a', id: '1', References: 'R' })).toBe('R');
+    expect(rf({ account: 'a', id: '1', nodemailer: { headers: { references: 'nmr' } } })).toBe(
+      'nmr',
+    );
+    expect(rf({ account: 'a', id: '1' })).toBeNull();
+  });
+
+  it('normalizes a raw (no account) record via normalizeMessageForCache', () => {
+    // Delegates to the real normalizer (id derives from raw.id), then layers
+    // the same fields — without coupling to the normalizer's full output.
+    const out = mapServerMessage({ id: '99', subject: 'Raw', folder: 'INBOX' }, 'INBOX', 'a', ns);
+    expect(out).not.toBeNull();
+    expect(out.id).toBe('99');
+    expect(out.pending).toBe(false);
+  });
+});
+
+describe('sortParamForOrder', () => {
+  it('maps each UI order to its API sort param', () => {
+    expect(sortParamForOrder('oldest')).toBe('date');
+    expect(sortParamForOrder('newest')).toBe('-date');
+    expect(sortParamForOrder('subject')).toBe('subject');
+    expect(sortParamForOrder('sender')).toBe('from');
+  });
+
+  it('defaults to newest-first (-date) for unknown/empty orders', () => {
+    expect(sortParamForOrder('')).toBe('-date');
+    expect(sortParamForOrder('whatever')).toBe('-date');
+  });
+});
+
+describe('buildMessageListRequestKey', () => {
+  const base = {
+    account: 'a@b.com',
+    folder: 'INBOX',
+    page: 1,
+    limit: 50,
+    sort: '-date',
+    query: '',
+    unreadOnly: false,
+    hasAttachmentsOnly: false,
+  };
+
+  it('joins every request-identifying field in a stable order', () => {
+    expect(buildMessageListRequestKey(base)).toBe('a@b.com:INBOX:1:50:-date::false:false');
+  });
+
+  it('changes when any response-affecting field changes (no false dedup)', () => {
+    const key = buildMessageListRequestKey(base);
+    expect(buildMessageListRequestKey({ ...base, folder: 'Sent' })).not.toBe(key);
+    expect(buildMessageListRequestKey({ ...base, page: 2 })).not.toBe(key);
+    expect(buildMessageListRequestKey({ ...base, limit: 100 })).not.toBe(key);
+    expect(buildMessageListRequestKey({ ...base, sort: 'subject' })).not.toBe(key);
+    expect(buildMessageListRequestKey({ ...base, query: 'hi' })).not.toBe(key);
+    expect(buildMessageListRequestKey({ ...base, unreadOnly: true })).not.toBe(key);
+    expect(buildMessageListRequestKey({ ...base, hasAttachmentsOnly: true })).not.toBe(key);
+  });
+});
+
+describe('buildMessageListParams', () => {
+  const base = {
+    folder: 'INBOX',
+    page: 1,
+    limit: 50,
+    query: '',
+    unreadOnly: false,
+    hasAttachmentsOnly: false,
+  };
+
+  it('always includes the base params, with no filters by default', () => {
+    expect(buildMessageListParams(base)).toEqual({
+      folder: 'INBOX',
+      page: 1,
+      limit: 50,
+      raw: false,
+      attachments: false,
+    });
+  });
+
+  it('includes search only when query is non-empty', () => {
+    expect(buildMessageListParams({ ...base, query: 'hello' })).toMatchObject({ search: 'hello' });
+    expect('search' in buildMessageListParams(base)).toBe(false);
+  });
+
+  it('includes is_unread / has_attachments only when those flags are set', () => {
+    expect(buildMessageListParams({ ...base, unreadOnly: true })).toMatchObject({
+      is_unread: true,
+    });
+    expect(buildMessageListParams({ ...base, hasAttachmentsOnly: true })).toMatchObject({
+      has_attachments: true,
+    });
+    const plain = buildMessageListParams(base);
+    expect('is_unread' in plain).toBe(false);
+    expect('has_attachments' in plain).toBe(false);
+  });
+});
+
+describe('shouldKeepCacheOnEmpty', () => {
+  const base = {
+    shouldAppend: false,
+    page: 1,
+    query: '',
+    unreadOnly: false,
+    hasAttachmentsOnly: false,
+    mergedLength: 0,
+    cachedCount: 5,
+    storeCount: 0,
+  };
+
+  it('keeps cache when a basic page-1 request returns empty but data exists', () => {
+    expect(shouldKeepCacheOnEmpty(base)).toBe(true);
+    // existing data may come from the store rather than the IDB cache
+    expect(shouldKeepCacheOnEmpty({ ...base, cachedCount: 0, storeCount: 3 })).toBe(true);
+  });
+
+  it('does NOT keep cache when the server legitimately returns messages', () => {
+    expect(shouldKeepCacheOnEmpty({ ...base, mergedLength: 10 })).toBe(false);
+  });
+
+  it('does NOT keep cache when there is no existing data to protect', () => {
+    expect(shouldKeepCacheOnEmpty({ ...base, cachedCount: 0, storeCount: 0 })).toBe(false);
+  });
+
+  it('only applies to a basic page-1 request (append/later-page/query/filters opt out)', () => {
+    expect(shouldKeepCacheOnEmpty({ ...base, shouldAppend: true })).toBe(false);
+    expect(shouldKeepCacheOnEmpty({ ...base, page: 2 })).toBe(false);
+    expect(shouldKeepCacheOnEmpty({ ...base, query: 'hi' })).toBe(false);
+    expect(shouldKeepCacheOnEmpty({ ...base, unreadOnly: true })).toBe(false);
+    expect(shouldKeepCacheOnEmpty({ ...base, hasAttachmentsOnly: true })).toBe(false);
+  });
+});
+
+describe('computePrunedIds', () => {
+  const page = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: undefined }];
+
+  it('prunes cached ids that are absent from the server set', () => {
+    expect(
+      computePrunedIds(page, {
+        serverIds: new Set(['a']),
+        pendingIds: new Set(),
+        queuedIds: new Set(),
+      }),
+    ).toEqual(['b', 'c']);
+  });
+
+  it('never prunes an optimistically-deleted (pending) id', () => {
+    expect(
+      computePrunedIds(page, {
+        serverIds: new Set(['a']),
+        pendingIds: new Set(['b']),
+        queuedIds: new Set(),
+      }),
+    ).toEqual(['c']);
+  });
+
+  it('never prunes an id with a queued offline mutation', () => {
+    expect(
+      computePrunedIds(page, {
+        serverIds: new Set(['a']),
+        pendingIds: new Set(),
+        queuedIds: new Set(['c']),
+      }),
+    ).toEqual(['b']);
+  });
+
+  it('ignores cache entries that have no id', () => {
+    expect(
+      computePrunedIds([{ id: undefined }], {
+        serverIds: new Set(),
+        pendingIds: new Set(),
+        queuedIds: new Set(),
+      }),
+    ).toEqual([]);
+  });
+});
+
+describe('isStaleListRequest', () => {
+  const base = {
+    activeAccount: 'a',
+    account: 'a',
+    activeFolder: 'INBOX',
+    folder: 'INBOX',
+    inFlightKey: 'k1',
+    requestKey: 'k1',
+  };
+
+  it('is not stale when account, folder, and request key all still match', () => {
+    expect(isStaleListRequest(base)).toBe(false);
+  });
+
+  it('is stale when the active account changed', () => {
+    expect(isStaleListRequest({ ...base, activeAccount: 'b' })).toBe(true);
+  });
+
+  it('is stale on a folder change, but case differences alone are not stale', () => {
+    expect(isStaleListRequest({ ...base, activeFolder: 'Sent' })).toBe(true);
+    expect(isStaleListRequest({ ...base, activeFolder: 'inbox' })).toBe(false);
+  });
+
+  it('is stale when a newer request superseded this one (key mismatch)', () => {
+    expect(isStaleListRequest({ ...base, inFlightKey: 'k2' })).toBe(true);
   });
 });

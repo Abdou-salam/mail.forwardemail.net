@@ -73,6 +73,15 @@ import {
   mergeMissingLabels,
   mergeMissingFrom,
   resolveHasMoreAfterFetch,
+  isNoContentResponse,
+  extractMessageList,
+  mapServerMessage,
+  sortParamForOrder,
+  buildMessageListRequestKey,
+  buildMessageListParams,
+  shouldKeepCacheOnEmpty,
+  computePrunedIds,
+  isStaleListRequest,
 } from './mailbox-store-helpers';
 import { createPendingDeleteTracker, createPendingFlagTracker } from './optimistic-trackers';
 
@@ -683,13 +692,7 @@ const createMailboxStore = () => {
     // look like it stopped at the oldest message of that first page (e.g.
     // ~July 2025 for a low-volume inbox); older pages exist but never loaded.
     const shouldAppend = currentPage > 1;
-    const sortParam = (() => {
-      if (currentSort === 'oldest') return 'date';
-      if (currentSort === 'newest') return '-date';
-      if (currentSort === 'subject') return 'subject';
-      if (currentSort === 'sender') return 'from';
-      return '-date';
-    })();
+    const sortParam = sortParamForOrder(currentSort);
     const queryParam = (get(query) || '').trim();
     const isBasicQuery =
       !queryParam && !get(unreadOnly) && !get(hasAttachmentsOnly) && !get(starredOnly);
@@ -826,7 +829,16 @@ const createMailboxStore = () => {
       }
 
     // Build request key for deduplication
-    const requestKey = `${account}:${folder}:${currentPage}:${limit}:${sortParam}:${queryParam}:${get(unreadOnly)}:${get(hasAttachmentsOnly)}`;
+    const requestKey = buildMessageListRequestKey({
+      account,
+      folder,
+      page: currentPage,
+      limit,
+      sort: sortParam,
+      query: queryParam,
+      unreadOnly: get(unreadOnly),
+      hasAttachmentsOnly: get(hasAttachmentsOnly),
+    });
 
     // If same request is already in flight, wait for it instead of making duplicate
     if (inFlightMessageListRequest?.key === requestKey) {
@@ -881,17 +893,15 @@ const createMailboxStore = () => {
       return { source: 'main', res };
     };
 
-    const requestParams = {
+    // Note: label filtering is done client-side in filteredMessages derived store
+    const requestParams = buildMessageListParams({
       folder,
       page: currentPage,
       limit,
-      raw: false,
-      attachments: false,
-      ...(queryParam ? { search: queryParam } : {}),
-      ...(get(unreadOnly) ? { is_unread: true } : {}),
-      ...(get(hasAttachmentsOnly) ? { has_attachments: true } : {}),
-      // Note: label filtering is done client-side in filteredMessages derived store
-    };
+      query: queryParam,
+      unreadOnly: get(unreadOnly),
+      hasAttachmentsOnly: get(hasAttachmentsOnly),
+    });
 
     // Only show skeleton when cache is completely empty — if we have cached data
     // already displayed, keep it visible while the network refreshes in the background
@@ -904,42 +914,13 @@ const createMailboxStore = () => {
       fetchWithFallback({ ...requestParams, limit: previewLimit }, 'preview_start')
         .then(({ source, res }) => {
           if (inFlightMessageListRequest?.key !== requestKey) return;
-          const isNoContent =
-            (source === 'worker' && res?.noContent) || (source === 'main' && res == null);
-          if (isNoContent) return;
-          const list =
-            source === 'worker'
-              ? res?.messages || []
-              : res?.Result?.List || res?.Result || res || [];
+          if (isNoContentResponse(source, res)) return;
+          const list = extractMessageList(source, res);
           if (!Array.isArray(list) || !list.length) return;
           tracer.stage('preview_end', { source, count: list.length });
           const mapped = list
-            .map((m) => {
-              const normalized = m?.account ? m : normalizeMessageForCache(m, folder, account);
-              return {
-                ...normalized,
-                normalizedSubject:
-                  normalized.normalizedSubject || normalizeSubjectMemoized(normalized.subject),
-                pending: false,
-                threadId: m.threadId || m.ThreadId || m.thread_id || normalized.thread_id,
-                in_reply_to:
-                  normalized.in_reply_to ||
-                  m.in_reply_to ||
-                  m.inReplyTo ||
-                  m['In-Reply-To'] ||
-                  m?.nodemailer?.headers?.['in-reply-to'] ||
-                  m?.nodemailer?.headers?.['In-Reply-To'] ||
-                  null,
-                references:
-                  normalized.references ||
-                  m.references ||
-                  m.References ||
-                  m?.nodemailer?.headers?.references ||
-                  m?.nodemailer?.headers?.References ||
-                  null,
-              };
-            })
-            .filter((m) => m.id);
+            .map((m) => mapServerMessage(m, folder, account, normalizeSubjectMemoized))
+            .filter(Boolean);
           if (!mapped.length) return;
           const activeNow = Local.get('email') || 'default';
           if (activeNow !== account) return;
@@ -968,15 +949,18 @@ const createMailboxStore = () => {
       const { source, res } = await requestPromise;
       const activeNow = Local.get('email') || 'default';
       const activeFolder = get(selectedFolder);
-      const isStaleRequest =
-        activeNow !== account ||
-        activeFolder?.toUpperCase() !== folder?.toUpperCase() ||
-        inFlightMessageListRequest?.key !== requestKey;
+      const isStaleRequest = isStaleListRequest({
+        activeAccount: activeNow,
+        account,
+        activeFolder,
+        folder,
+        inFlightKey: inFlightMessageListRequest?.key,
+        requestKey,
+      });
       if (isStaleRequest) {
         tracer.stage('stale_request_continue_cache', { source });
       }
-      const isNoContent =
-        (source === 'worker' && res?.noContent) || (source === 'main' && res == null);
+      const isNoContent = isNoContentResponse(source, res);
       if (isNoContent) {
         if (!isStaleRequest) {
           loading.set(false);
@@ -985,8 +969,7 @@ const createMailboxStore = () => {
         tracer.end({ status: 'no_content', source });
         return;
       }
-      const list =
-        source === 'worker' ? res?.messages || [] : res?.Result?.List || res?.Result || res || [];
+      const list = extractMessageList(source, res);
       // Keep infinite scroll alive while the server still has more than we've
       // paged, not just while the last fetched page looked full — otherwise a
       // short first server page strands the rest of a large folder (the
@@ -1012,32 +995,10 @@ const createMailboxStore = () => {
       const mapped = [];
       const labelPresence = [];
       for (const m of list) {
-        const normalized = m?.account ? m : normalizeMessageForCache(m, folder, account);
-        if (!normalized?.id) continue;
-        const incomingLabels = coerceLabelList(normalized.labels);
-        mapped.push({
-          ...normalized,
-          normalizedSubject:
-            normalized.normalizedSubject || normalizeSubjectMemoized(normalized.subject),
-          pending: false,
-          threadId: m.threadId || m.ThreadId || m.thread_id || normalized.thread_id,
-          in_reply_to:
-            normalized.in_reply_to ||
-            m.in_reply_to ||
-            m.inReplyTo ||
-            m['In-Reply-To'] ||
-            m?.nodemailer?.headers?.['in-reply-to'] ||
-            m?.nodemailer?.headers?.['In-Reply-To'] ||
-            null,
-          references:
-            normalized.references ||
-            m.references ||
-            m.References ||
-            m?.nodemailer?.headers?.references ||
-            m?.nodemailer?.headers?.References ||
-            null,
-        });
-        labelPresence.push(incomingLabels.length > 0);
+        const mappedMsg = mapServerMessage(m, folder, account, normalizeSubjectMemoized);
+        if (!mappedMsg) continue;
+        mapped.push(mappedMsg);
+        labelPresence.push(coerceLabelList(mappedMsg.labels).length > 0);
       }
       tracer.stage('map_end', { count: mapped.length });
 
@@ -1062,15 +1023,19 @@ const createMailboxStore = () => {
       // as well as cold-start scenarios where the IDB read fails after
       // webview suspension (e.g. Tauri app returning from background)
       // but the messages store still holds the previous data.
-      const isBasicPage1 =
-        !shouldAppend &&
-        currentPage === 1 &&
-        !queryParam &&
-        !get(unreadOnly) &&
-        !get(hasAttachmentsOnly);
       const existingStoreMessages = get(messages) || [];
-      const hasExistingData = cachedPage.length || existingStoreMessages.length;
-      if (isBasicPage1 && !merged.length && hasExistingData) {
+      if (
+        shouldKeepCacheOnEmpty({
+          shouldAppend,
+          page: currentPage,
+          query: queryParam,
+          unreadOnly: get(unreadOnly),
+          hasAttachmentsOnly: get(hasAttachmentsOnly),
+          mergedLength: merged.length,
+          cachedCount: cachedPage.length,
+          storeCount: existingStoreMessages.length,
+        })
+      ) {
         tracer.end({
           status: 'transient_empty_kept_cache',
           cachedCount: cachedPage.length,
@@ -1148,15 +1113,7 @@ const createMailboxStore = () => {
             tracer.stage('cache_prune_start');
             const serverIds = new Set(merged.map((msg) => msg.id).filter(Boolean));
             const pendingIds = new Set(getPendingDeleteIds());
-            prunedIds = cachedPage
-              .filter(
-                (msg) =>
-                  msg?.id &&
-                  !serverIds.has(msg.id) &&
-                  !pendingIds.has(msg.id) &&
-                  !queuedIds.has(msg.id),
-              )
-              .map((msg) => msg.id);
+            prunedIds = computePrunedIds(cachedPage, { serverIds, pendingIds, queuedIds });
             if (prunedIds.length) {
               const pairs = prunedIds.map((id) => [account, id]);
               await db.messages.bulkDelete(pairs);
@@ -1231,9 +1188,14 @@ const createMailboxStore = () => {
       const activeNow = Local.get('email') || 'default';
       const activeFolder = get(selectedFolder);
       if (
-        activeNow !== account ||
-        activeFolder?.toUpperCase() !== folder?.toUpperCase() ||
-        inFlightMessageListRequest?.key !== requestKey
+        isStaleListRequest({
+          activeAccount: activeNow,
+          account,
+          activeFolder,
+          folder,
+          inFlightKey: inFlightMessageListRequest?.key,
+          requestKey,
+        })
       ) {
         resolveInflight(undefined);
         tracer.end({ status: 'stale_request_error' });
