@@ -35,22 +35,14 @@ APK_PATH="$(realpath "$APK_PATH")"
 echo "Using APK: $APK_PATH"
 export APK_PATH
 
-# Move WebView RASTERIZATION to the CPU before the app launches, while keeping
-# the GPU compositor alive. Two failure modes had to be threaded:
-#   - GPU rasterization ON: the WebView's Skia path-tessellation shaders
-#     (s_glBindAttribLocation storm + "Skipped 56 frames" + 1s Davey jank),
-#     translated through the headless emulator's software-GL pipe, overwhelm it
-#     and drop the whole emulator to adb "offline" mid-render.
-#   - GPU fully OFF (--disable-gpu/--disable-gpu-compositing): wry's Android
-#     WebView composites into a hardware surface and can't init without the GPU
-#     compositor, so the app process dies on launch.
-# --disable-gpu-rasterization keeps the (lightweight) GPU compositor that wry
-# needs but rasters tiles in software, which is exactly the heavy GL work that
-# was killing the emulator. The image is userdebug so the WebView honors this
-# flags file (first token is a dummy argv[0]).
-adb shell "echo '_ --disable-gpu-rasterization' > /data/local/tmp/webview-command-line" || true
-adb shell 'chmod 0644 /data/local/tmp/webview-command-line' || true
-echo "WebView command-line flags: $(adb shell cat /data/local/tmp/webview-command-line 2>/dev/null || echo '(unset)')"
+# The smoke test is NATIVE-ONLY on Android (see e2e-mobile/specs/smoke.spec.ts):
+# it never switches into the WebView context (setContext via chromedriver), which
+# was the operation that took the software-GL emulator offline via a WebView
+# GPU-rasterization storm. Earlier attempts forced WebView rendering through
+# /data/local/tmp/webview-command-line to survive that switch (--disable-gpu*
+# killed app launch outright; --disable-gpu-rasterization was never confirmed).
+# With no context switch we want DEFAULT rendering — the path under which the app
+# + WebView were observed to launch cleanly — so NO WebView flags are injected.
 
 # Capture logcat in the background so a renderer/emulator crash is diagnosable
 # after the fact (lowmemorykiller / OOM vs an app tombstone). Written to the
@@ -60,11 +52,12 @@ adb logcat -c 2>/dev/null || true
 adb logcat > logcat.log 2>&1 &
 LOGCAT_PID=$!
 
-# Switching into the Android System WebView context needs a Chromedriver that
-# matches the emulator's WebView (Chrome 113 on the API 34 image); the version
-# bundled with uiautomator2 won't ("No Chromedriver found that can automate
-# Chrome 113..."). Enable the chromedriver_autodownload insecure feature so the
-# driver fetches the matching Chromedriver on demand at context-switch time.
+# The native-only smoke does NOT switch into the WebView context, so it never
+# needs Chromedriver. The chromedriver_autodownload insecure feature is kept as a
+# no-op safety net so that if a test ever does switch contexts (e.g. on a
+# real-device cloud with a working GPU), the driver can still fetch a matching
+# Chromedriver instead of failing with "No Chromedriver found that can automate
+# Chrome <ver>". It has no effect on the native-only path.
 appium --port 4723 --allow-insecure=uiautomator2:chromedriver_autodownload > appium.log 2>&1 &
 APPIUM_PID=$!
 trap 'kill "$APPIUM_PID" "$LOGCAT_PID" 2>/dev/null || true' EXIT

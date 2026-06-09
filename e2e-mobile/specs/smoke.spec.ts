@@ -4,12 +4,17 @@ import {
   switchToTauriWebview,
   waitForFrontendReady,
   isTauriWebview,
+  waitForTauriWebviewContext,
+  nativeHierarchyHasWebView,
   mobileCapabilities,
   e2ePlatform,
 } from '../support/app.js';
 
-describe(`${e2ePlatform()} app smoke`, () => {
+const platform = e2ePlatform();
+
+describe(`${platform} app smoke`, () => {
   let browser: WebdriverIO.Browser;
+  let webviewContext = '';
 
   beforeAll(async () => {
     browser = await newBrowser({
@@ -24,17 +29,41 @@ describe(`${e2ePlatform()} app smoke`, () => {
       connectionRetryTimeout: 600_000,
       capabilities: mobileCapabilities(),
     });
-    await switchToTauriWebview(browser);
-    await waitForFrontendReady(browser);
+    if (platform === 'ios') {
+      // The iOS simulator has a real GPU, so the WKWebView context switch is
+      // reliable — iOS runs the full in-WebView assertions.
+      await switchToTauriWebview(browser);
+      await waitForFrontendReady(browser);
+    } else {
+      // Android: NATIVE-ONLY. Switching into the WebView context (setContext via
+      // chromedriver) reliably takes the software-GL CI emulator offline (WebView
+      // GPU-rasterization storm — see the e2e-mobile notes), so we verify the app
+      // + WebView launched from the native side and never attach chromedriver.
+      webviewContext = await waitForTauriWebviewContext(browser);
+    }
   }, 660_000);
 
   afterAll(closeBrowser);
 
-  it('runs inside the native WebView (Tauri-bridged)', async () => {
-    expect(await isTauriWebview(browser)).toBe(true);
-  });
+  if (platform === 'ios') {
+    it('runs inside the native WebView (Tauri-bridged)', async () => {
+      expect(await isTauriWebview(browser)).toBe(true);
+    });
 
-  it('loads the frontend with a non-empty title', async () => {
-    expect(await browser.getTitle()).toBeTruthy();
-  });
+    it('loads the frontend with a non-empty title', async () => {
+      expect(await browser.getTitle()).toBeTruthy();
+    });
+  } else {
+    it('launches the app and spins up the Tauri WebView (native-only)', () => {
+      // A WebView context carrying the app bundle id proves the app process
+      // launched AND its WebView came up — established without switching in
+      // (which crashes the emulator). This is the weaker, emulator-safe
+      // guarantee chosen for 1.0; the full in-WebView assertions run on iOS.
+      expect(webviewContext).toContain('net.forwardemail.mail');
+    });
+
+    it('shows a WebView in the native view hierarchy', async () => {
+      expect(await nativeHierarchyHasWebView(browser)).toBe(true);
+    });
+  }
 });

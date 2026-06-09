@@ -81,6 +81,43 @@ export async function switchToTauriWebview(
   throw new Error(`No WebView context appeared within ${timeoutMs}ms (platform=${e2ePlatform()})`);
 }
 
+// Native-only check (Android): wait until the Tauri WebView context APPEARS in
+// the context list, WITHOUT switching into it. On the software-GL CI emulator,
+// switching contexts (setContext via chromedriver) reliably takes the whole
+// emulator offline — a WebView GPU-rasterization storm (see the e2e-mobile
+// iteration notes). getContexts() only ENUMERATES the WebView devtools sockets
+// (no chromedriver, no rendering), so it's safe. A context tagged with the app
+// bundle id proves the app process launched AND its WebView came up.
+export async function waitForTauriWebviewContext(
+  browser: WebdriverIO.Browser,
+  timeoutMs = 60_000,
+): Promise<string> {
+  const start = Date.now();
+  let lastContexts: string[] = [];
+  while (Date.now() - start < timeoutMs) {
+    const contexts = (await browser.getContexts()) as Array<string | { id: string }>;
+    lastContexts = contexts.map((c) => (typeof c === 'string' ? c : c.id));
+    const webview =
+      lastContexts.find((c) => c.startsWith('WEBVIEW_') && c.includes(TAURI_BUNDLE_ID)) ??
+      lastContexts.find((c) => c.startsWith('WEBVIEW_'));
+    if (webview) return webview;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new Error(
+    `Tauri WebView context did not appear within ${timeoutMs}ms ` +
+      `(contexts: ${lastContexts.join(', ') || 'none'})`,
+  );
+}
+
+// Native-only check (Android): confirm a WebView exists in the UiAutomator2
+// native view hierarchy. getPageSource() in the NATIVE_APP context dumps native
+// XML (no chromedriver), so it's emulator-safe. wry's Android WebView is a
+// RustWebView extends android.webkit.WebView, so match "webview" loosely.
+export async function nativeHierarchyHasWebView(browser: WebdriverIO.Browser): Promise<boolean> {
+  const source = await browser.getPageSource();
+  return /webview/i.test(source);
+}
+
 export async function waitForFrontendReady(
   browser: WebdriverIO.Browser,
   timeoutMs = 20_000,
