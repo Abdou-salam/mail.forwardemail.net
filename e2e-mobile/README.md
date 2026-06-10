@@ -7,7 +7,7 @@ Android (and later iOS) E2E tests for the Tauri app, driven by **Vitest** + the 
 The desktop suite uses `tauri-plugin-webdriver` (a W3C server embedded in the app). On Android we use **Appium with the UiAutomator2 driver** instead, because:
 
 - Tauri's docs explicitly call out mobile-via-Appium as the supported path.
-- Android System WebView is already remote-debuggable; Appium's `webview` context switching gives us standard CSS selectors against the DOM with no plugin dependency on the app side.
+- Appium's `webview` context switching gives standard CSS selectors against the DOM with no app-side plugin — used in full on iOS. (On Android the CI emulator cannot survive the context switch, so the Android smoke is native-only; see [Smoke spec internals](#smoke-spec-internals).)
 - The Cargo `webdriver` feature is desktop-only and would not compile for Android targets anyway.
 
 ## Local prerequisites (Mac)
@@ -45,9 +45,12 @@ APK_PATH="$(realpath src-tauri/gen/android/app/build/outputs/apk/x86_64/debug/*-
 
 ## Smoke spec internals
 
-The smoke spec switches to the Tauri WebView context (`WEBVIEW_net.forwardemail.mail`) before any assertion. The switch uses **polling, not a fixed sleep** — on a cold emulator, the WebView context can take 10–30s to appear after `NATIVE_APP`, and a fixed sleep either times out for nothing or wastes the difference on every run.
+The spec splits by platform because only one of the two CI environments can survive switching into the WebView context:
 
-Once switched, the assertions are the same as desktop: title is set, `__TAURI_INTERNALS__` is defined.
+- **iOS** (the simulator has a real GPU): the spec switches into the WKWebView context (`switchToTauriWebview`) and runs the full in-WebView assertions — the Tauri bridge is up (`__TAURI_INTERNALS__` is defined) and the frontend rendered a non-empty title. The switch uses **polling, not a fixed sleep**, since the WebView context can take 10–30s to appear after `NATIVE_APP`.
+- **Android** (the CI emulator runs software GL): switching into the WebView context via chromedriver reliably takes the emulator offline — a WebView GPU-rasterization storm. So the Android path is **native-only**: it never attaches chromedriver and never inspects the DOM. It asserts (a) a WebView context carrying the app bundle id appeared — proving the app process launched and its WebView came up — and (b) a WebView node exists in the native view hierarchy.
+
+**Caveat — what the Android smoke does NOT prove:** because it never reads the DOM, it's a launch / native-shell guarantee, not a "the web app rendered" guarantee — a blank-white WebView would still pass. This is the deliberate, emulator-safe bar chosen for 1.0 (release gating is the desktop pipeline, not this nightly job). Proving the Android web app actually renders needs a real-GPU device cloud (Firebase Test Lab / BrowserStack); tracked separately.
 
 ## CI
 

@@ -182,13 +182,16 @@ export async function openCompose(page, testInfo) {
  * Fill and send a compose message.
  */
 export async function composeAndSend(page, { to, subject, body }) {
-  // Fill To field
-  const toInput = page.locator('input[placeholder*="To"], input[type="email"]').first();
+  // Fill the To field. Match the compose recipient input by its exact 'To'
+  // placeholder — a broad input[type=email] selector also matches the hidden
+  // login form's email field (placeholder "you@example.com"), which sits
+  // earlier in the DOM and is not visible.
+  const toInput = page.getByPlaceholder('To', { exact: true });
   await toInput.fill(to);
-  await toInput.press('Enter');
+  await toInput.press('Enter'); // commit the recipient chip
 
   // Fill subject
-  const subjectInput = page.locator('input[placeholder*="Subject"]').first();
+  const subjectInput = page.getByPlaceholder('Subject').first();
   await subjectInput.fill(subject);
 
   // Fill body (TipTap editor)
@@ -196,8 +199,9 @@ export async function composeAndSend(page, { to, subject, body }) {
   await editor.click();
   await editor.fill(body);
 
-  // Click send
-  await page.getByRole('button', { name: /Send/i }).first().click();
+  // Click the primary Send button (exact, so it doesn't match "Send & Archive"
+  // or "Schedule Send").
+  await page.getByRole('button', { name: 'Send', exact: true }).first().click();
 }
 
 /**

@@ -10,6 +10,7 @@ import {
   enterSelectionMode,
   selectRowCheckbox,
   openComposeFromSidebar,
+  composeAndSend,
 } from '../fixtures/mailbox-helpers.js';
 
 // All tests in this file are desktop-only
@@ -36,6 +37,25 @@ test.describe('Desktop — Compose', () => {
     await expect(page.locator('[contenteditable="true"]').first()).toBeVisible({
       timeout: 5000,
     });
+  });
+
+  test('compose and send fires the send request', async ({ page }) => {
+    await openComposeFromSidebar(page);
+    // The send network call (POST /v1/emails) is what demo mode blocks; against
+    // the mock backend it goes through. Assert it actually fires with the
+    // recipient — this is the only e2e coverage of the compose → outbox → API
+    // send path (the optimistic-UI tests don't touch the network).
+    const sendRequest = page.waitForRequest(
+      (r) => r.url().includes('/v1/emails') && r.method() === 'POST',
+      { timeout: 10000 },
+    );
+    await composeAndSend(page, {
+      to: 'recipient@example.com',
+      subject: 'E2E send test',
+      body: 'Hello from the e2e send path.',
+    });
+    const req = await sendRequest;
+    expect(req.postData() || '').toContain('recipient@example.com');
   });
 });
 
