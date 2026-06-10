@@ -286,6 +286,14 @@
     border-color: var(--color-primary, hsl(var(--primary)));
   }
 
+  /* Hide the browser's native search clear (X). The component renders its own
+     clear button (.fe-search-overlay-clear); without this, WebKit/Chromium
+     also draw their native cancel control, showing a duplicate X. */
+  .fe-search-overlay-input::-webkit-search-cancel-button {
+    -webkit-appearance: none;
+    appearance: none;
+  }
+
   .fe-search-overlay-spinner {
     position: absolute;
     right: 12px;

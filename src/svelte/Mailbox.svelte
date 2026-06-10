@@ -192,6 +192,8 @@
   import EmailIframe from './components/EmailIframe.svelte';
   import AboutDialog from './AboutDialog.svelte';
   import TabBar from './components/TabBar.svelte';
+  import MobileTabBar from './components/MobileTabBar.svelte';
+  import MobileSearchOverlay from './components/MobileSearchOverlay.svelte';
   import MessageTab from './components/MessageTab.svelte';
   import CalendarInviteCard from './components/CalendarInviteCard.svelte';
   import {
@@ -4190,12 +4192,38 @@
 
   // ── Mobile tab bar state ──────────────────────────────────────────────────
   const inboxUnseenCount = $derived(($folders || []).find((f) => f.path === 'INBOX')?.count || 0);
-  const mobileActiveTab = $derived.by(() => {
-    if ($searchActiveStore) return 'search';
-    return 'inbox';
-  });
   // FAB visibility: show on mobile when reader and sidebar are closed
   const showMobileFab = $derived(isMobile && !$mobileReader && !$sidebarOpen);
+
+  // ── Mobile native chrome: bottom tab bar + full-screen search overlay ──────
+  // The tab bar (Inbox / Search / Compose / Settings) is the primary mobile
+  // navigation; the search overlay is a dedicated full-screen search SCREEN
+  // (not a header input). Compose is owned by the tab bar, replacing the
+  // former compose-only FAB.
+  let mobileSearchOpen = $state(false);
+  // Search tab is "active" while the overlay is open or a search is in effect.
+  const mobileActiveTab = $derived.by(() => {
+    if (mobileSearchOpen || $searchActiveStore) return 'search';
+    return 'inbox';
+  });
+  const openMobileSearch = () => {
+    mobileSearchOpen = true;
+  };
+  const closeMobileSearch = () => {
+    mobileSearchOpen = false;
+  };
+  const handleMobileInbox = () => {
+    mobileSearchOpen = false;
+    closeReaderFullscreen({ updateUrl: true });
+    handleSelectFolder('INBOX');
+  };
+  const handleMobileCompose = () => {
+    mailboxView?.composeModal?.open?.();
+  };
+  const handleMobileSettings = () => {
+    mobileSearchOpen = false;
+    navigate('/mailbox/settings');
+  };
 
   let selectedFolderTotalCount = $state(null);
   $effect(() => {
@@ -5052,6 +5080,11 @@
     // Android back button navigation stack
     if (isTauriMobile) {
       onBackButton(() => {
+        // 0. Close the full-screen search overlay first (it's the topmost screen)
+        if (mobileSearchOpen) {
+          closeMobileSearch();
+          return;
+        }
         // 1. Close reader if open
         if (get(mobileReader)) {
           closeReaderFullscreen({ clearSelection: true });
@@ -5426,7 +5459,10 @@
           <Tooltip.Content side="bottom"><p>Toggle sidebar</p></Tooltip.Content>
         </Tooltip.Root>
         <div class="flex items-center gap-3 flex-1">
-          <div class="relative flex-1 md:max-w-[420px]">
+          <!-- On phones, search lives in the dedicated full-screen overlay (the
+               Search tab), so hide this header input to keep the top bar minimal
+               and avoid a duplicate search affordance. -->
+          <div class="relative flex-1 md:max-w-[420px]" class:hidden={isMobile}>
             <Search
               class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground"
             />
@@ -8893,16 +8929,30 @@
 
         <AboutDialog bind:open={aboutDialogOpen} />
 
-        <!-- Mobile Floating Action Button (FAB) for Compose — Gmail style -->
-        {#if showMobileFab}
-          <Button
-            class="fixed right-5 w-14 h-14 rounded-full shadow-lg z-50 md:hidden"
-            style="bottom: calc(1.5rem + env(safe-area-inset-bottom, 0px))"
-            aria-label="Compose"
-            onclick={() => mailboxView?.composeModal?.open?.()}
-          >
-            <Pencil class="h-5 w-5" />
-          </Button>
+        <!-- Mobile bottom tab bar — native primary navigation. Hidden while the
+             full-screen reader or search overlay is open (those are their own
+             screens). Replaces the former compose-only FAB; Compose now lives
+             in the tab bar. -->
+        {#if isMobile && !$mobileReader && !mobileSearchOpen}
+          <MobileTabBar
+            {inboxUnseenCount}
+            activeTab={mobileActiveTab}
+            onInbox={handleMobileInbox}
+            onSearch={openMobileSearch}
+            onCompose={handleMobileCompose}
+            onSettings={handleMobileSettings}
+          />
+        {/if}
+
+        <!-- Mobile full-screen search overlay (dedicated search screen) -->
+        {#if mobileSearchOpen}
+          <MobileSearchOverlay
+            query={$query}
+            suggestions={filteredSuggestions}
+            searching={$searchingStore}
+            {onSearch}
+            onClose={closeMobileSearch}
+          />
         {/if}
 
         <!-- Folder management components -->
@@ -8993,6 +9043,14 @@
     overflow-x: hidden;
     overflow-y: auto;
     min-height: 0;
+  }
+
+  /* Reserve space for the fixed mobile bottom tab bar (56px + iOS home-indicator
+     inset) so the last list rows aren't hidden behind it. */
+  @media (max-width: 640px) {
+    :global(.fe-mailbox-wrapper .fe-message-list-wrapper) {
+      padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+    }
   }
 
   /* Pagination should not grow */
