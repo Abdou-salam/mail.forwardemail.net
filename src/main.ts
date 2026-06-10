@@ -1772,6 +1772,22 @@ async function bootstrap() {
   // Mark as ready early to avoid blank screen if async init stalls.
   root.classList.add('ready');
 
+  // Request durable IndexedDB storage (best-effort, non-blocking). Without this,
+  // some engines — notably Linux WebKitGTK under the tauri:// origin — can evict
+  // the cache, and the offline mutation queue with it, under storage pressure,
+  // silently losing queued user actions (moves/deletes/sends). Fire-and-forget
+  // so it never delays boot; failures are an optimization miss, not fatal.
+  try {
+    if (navigator.storage?.persist) {
+      void navigator.storage
+        .persisted()
+        .then((already) => (already ? null : navigator.storage.persist()))
+        .catch(() => {});
+    }
+  } catch {
+    /* best-effort */
+  }
+
   try {
     // In development, aggressively cleanup any stale workers/service workers
     // This prevents old code from holding stale database connections

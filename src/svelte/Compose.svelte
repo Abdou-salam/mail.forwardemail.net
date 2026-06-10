@@ -70,6 +70,7 @@
   import TableHeader from '@tiptap/extension-table-header';
   import { bufferToDataUrl, extractTextContent } from '../utils/mime-utils.js';
   import { pickFiles } from '../utils/file-picker';
+  import { isTauriDesktop } from '../utils/platform';
   import { i18n } from '../utils/i18n';
   import { Remote } from '../utils/remote';
   import { getContacts, mergeRecentAddresses } from '../utils/contact-cache';
@@ -1884,7 +1885,11 @@
       await processSelectedFiles(files);
       return;
     }
-    attachInputEl?.click();
+    // Web only: fall through to the hidden <input type="file">. On Tauri a null
+    // result means the user cancelled the native picker — do NOT click the
+    // <input>, which would trigger WebKit's runOpenPanel (a SIGABRT vector that
+    // is otherwise only blocked by the global click interceptor in main.ts).
+    if (!isTauriDesktop) attachInputEl?.click();
   };
 
   const triggerImagePicker = async () => {
@@ -1900,7 +1905,9 @@
       processSelectedImage(files[0]);
       return;
     }
-    imageInputEl?.click();
+    // Web only — see triggerFilePicker; the <input> fallback would SIGABRT the
+    // WKWebView on Tauri.
+    if (!isTauriDesktop) imageInputEl?.click();
   };
 
   const processSelectedFiles = async (files: File[] | FileList) => {

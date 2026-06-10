@@ -726,6 +726,27 @@ async fn unregister_unified_push(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Leave a breadcrumb before any panic aborts the process — e.g. an objc2
+    // none_fail SIGABRT from a nil NSOpenPanel. tauri-plugin-log captures
+    // log::error! into the rotating, redacted log file, so a field crash leaves
+    // a record instead of depending on the user mailing in a macOS .ips report.
+    // The default hook is chained so normal stderr output / abort is preserved.
+    let default_panic_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "unknown".to_string());
+        let message = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| (*s).to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "<non-string panic payload>".to_string());
+        log::error!("PANIC at {}: {}", location, message);
+        default_panic_hook(info);
+    }));
+
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
 
