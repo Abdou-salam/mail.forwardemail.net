@@ -134,8 +134,9 @@ test.describe('Mailbox — mobile layout', () => {
     await navigateToMailbox(page);
   });
 
-  test('shows FAB compose button', async ({ page }) => {
-    await expect(page.getByLabel('Compose')).toBeVisible();
+  test('shows compose button in bottom tab bar', async ({ page }) => {
+    // Compose now lives in the mobile bottom tab bar (it replaced the FAB).
+    await expect(page.locator('.fe-mobile-tabbar').getByLabel('Compose')).toBeVisible();
   });
 
   test('shows avatar circles in message rows', async ({ page }) => {
@@ -179,10 +180,19 @@ test.describe('Mailbox — search', () => {
     await navigateToMailbox(page);
   });
 
-  test('search input accepts text and triggers search', async ({ page }) => {
-    const searchInput = page.getByPlaceholder('Search mail');
-    await searchInput.fill('calendar');
-    await expect(searchInput).toHaveValue('calendar');
+  test('search input accepts text and triggers search', async ({ page }, testInfo) => {
+    if (isMobileProject(testInfo)) {
+      // On mobile, search lives in the full-screen overlay opened from the
+      // Search tab in the bottom tab bar — not a header input.
+      await page.locator('.fe-mobile-tabbar').getByLabel('Search').click();
+      const overlayInput = page.locator('.fe-search-overlay-input');
+      await overlayInput.fill('calendar');
+      await expect(overlayInput).toHaveValue('calendar');
+    } else {
+      const searchInput = page.getByPlaceholder('Search mail');
+      await searchInput.fill('calendar');
+      await expect(searchInput).toHaveValue('calendar');
+    }
   });
 });
 
