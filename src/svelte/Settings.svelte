@@ -54,6 +54,13 @@
       console.warn('[Settings] opener failed:', err);
     }
   };
+
+  // In-app account-deletion entry point. Apple Guideline 5.1.1(v) and Google
+  // Play's data-deletion policy both require a discoverable in-app path to
+  // delete your account; a hand-off to the web flow is permitted as long as
+  // the in-app entry exists and links as directly as possible to deletion.
+  // /my-account/security is where account deletion lives on forwardemail.net.
+  const ACCOUNT_DELETE_URL = 'https://forwardemail.net/my-account/security';
   import {
     getLatestDesktopRelease,
     detectPlatform as detectDesktopPlatform,
@@ -1605,6 +1612,28 @@
           </Card.Content>
         </Card.Root>
 
+        <!-- In-app account deletion (App Store 5.1.1(v) / Google Play). Distinct
+             from "Sign out", which only removes the account from this device. -->
+        <Card.Root>
+          <Card.Header>
+            <Card.Title class="flex items-center gap-2">
+              <AlertTriangle class="h-5 w-5 text-destructive" />
+              Delete account
+            </Card.Title>
+          </Card.Header>
+          <Card.Content>
+            <p class="mb-4 text-sm text-muted-foreground">
+              Permanently delete your Forward Email account and all of its data. This opens your
+              account settings on forwardemail.net to confirm and complete deletion. This is
+              different from signing out and cannot be undone.
+            </p>
+            <Button variant="destructive" onclick={() => openExternal(ACCOUNT_DELETE_URL)}>
+              <ExternalLink class="mr-2 h-4 w-4" />
+              Delete account
+            </Button>
+          </Card.Content>
+        </Card.Root>
+
         {#if storageTotalValue > 0}
           <Card.Root>
             <Card.Header>
@@ -2637,6 +2666,14 @@
                   target="_blank"
                   rel="noopener noreferrer"
                   class="text-sky-500 hover:text-sky-400 hover:underline">Email API Documentation</a
+                >
+              </li>
+              <li>
+                <a
+                  href="https://forwardemail.net/privacy"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="text-sky-500 hover:text-sky-400 hover:underline">Privacy Policy</a
                 >
               </li>
             </ul>

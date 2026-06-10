@@ -265,6 +265,13 @@
             </p>
             <p class="mt-2">
               <button
+                class="text-sky-500 hover:underline inline cursor-pointer"
+                onclick={() => openExternal('https://forwardemail.net/privacy')}
+                >Privacy Policy</button
+              >
+            </p>
+            <p class="mt-2">
+              <button
                 class="hover:underline inline cursor-pointer"
                 onclick={() => {
                   close();

@@ -151,6 +151,43 @@ if (fs.existsSync(infoPlistPath)) {
   }
 }
 
+// ── 3b. Inject App Store compliance keys into Info.plist ─────────────────────
+// ITSAppUsesNonExemptEncryption=false: the app uses only standard/exempt crypto
+// (TLS + user-held PGP keys via libsodium/openpgp), qualifying for the
+// mass-market exemption (US EAR §740.17(b)(1)). Declaring it avoids the
+// per-build "Missing Compliance" stall in App Store Connect.
+// NSPhotoLibraryUsageDescription is required because the app presents an image
+// picker for attachments / avatars (<input type="file" accept="image/*">).
+if (fs.existsSync(infoPlistPath)) {
+  const photoUsage =
+    'Forward Email needs access to your photos so you can attach images to emails and set a profile picture.';
+  try {
+    execSync(`plutil -replace ITSAppUsesNonExemptEncryption -bool false "${infoPlistPath}"`);
+    execSync(
+      `plutil -replace NSPhotoLibraryUsageDescription -string "${photoUsage}" "${infoPlistPath}"`,
+    );
+    console.log('Injected ITSAppUsesNonExemptEncryption=false + NSPhotoLibraryUsageDescription');
+  } catch {
+    // Regex fallback (no plutil): insert each key before the final </dict>
+    // only if it isn't already present.
+    let plist = fs.readFileSync(infoPlistPath, 'utf8');
+    if (!/<key>ITSAppUsesNonExemptEncryption<\/key>/.test(plist)) {
+      plist = plist.replace(
+        /<\/dict>(\s*<\/plist>\s*)$/m,
+        `  <key>ITSAppUsesNonExemptEncryption</key>\n  <false/>\n</dict>$1`,
+      );
+    }
+    if (!/<key>NSPhotoLibraryUsageDescription<\/key>/.test(plist)) {
+      plist = plist.replace(
+        /<\/dict>(\s*<\/plist>\s*)$/m,
+        `  <key>NSPhotoLibraryUsageDescription</key>\n  <string>${photoUsage}</string>\n</dict>$1`,
+      );
+    }
+    fs.writeFileSync(infoPlistPath, plist);
+    console.log('Injected compliance keys via regex fallback');
+  }
+}
+
 // ── 4. Inject aps-environment for iOS builds ────────────────────────────────
 // Entitlements.plist no longer ships with aps-environment (the Developer ID
 // cert used for macOS distribution is not APNs-authorized; embedding the
