@@ -16,9 +16,11 @@ let current: WebdriverIO.Browser | undefined;
  * subsequent spec cascades. Force-killing the app frees the port and tears down
  * the stuck dialog, so each spec gets a clean instance.
  *
- * No-op on macOS/Linux: they dismiss the dialog reliably, those CI rows don't
- * exhibit the cascade, and a name-based kill there could take out a developer's
- * `tauri dev` instance during a local run.
+ * Runs only in teardown (closeBrowser), so a spec's app is always reclaimed
+ * before the next spec launches its own — without adding latency to the tight
+ * beforeAll/newBrowser budget. No-op on macOS/Linux: they dismiss the dialog
+ * reliably, those CI rows don't exhibit the cascade, and a name-based kill
+ * there could take out a developer's `tauri dev` instance during a local run.
  */
 async function forceKillApp(): Promise<void> {
   if (process.platform !== 'win32') return;
@@ -34,9 +36,6 @@ async function forceKillApp(): Promise<void> {
 }
 
 export async function newBrowser(opts: RemoteOptions): Promise<WebdriverIO.Browser> {
-  // Reclaim any app a previous spec left running before launching a fresh one,
-  // so a still-bound :4445 can't fail this session.
-  await forceKillApp();
   current = await remote(opts);
   return current;
 }
