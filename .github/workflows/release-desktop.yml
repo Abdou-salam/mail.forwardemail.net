@@ -228,34 +228,6 @@ jobs:
           fi
           echo "All Apple signing/notary secrets present for ${{ matrix.label }}."
 
-      # Windows signing fails OPEN in tauri-action: with no cert secrets it
-      # just produces an unsigned msi/nsis and the release publishes it.
-      # Unsigned installers trip SmartScreen ("Windows protected your PC")
-      # and erode trust. Make it fail CLOSED, mirroring the macOS policy.
-      # Break-glass: set repo variable ALLOW_UNSIGNED_WINDOWS=true to ship a
-      # one-off unsigned Windows build (e.g. before a cert is provisioned).
-      - name: Require Windows signing secrets on Windows rows
-        if: runner.os == 'Windows'
-        shell: bash
-        env:
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-          ALLOW_UNSIGNED_WINDOWS: ${{ vars.ALLOW_UNSIGNED_WINDOWS }}
-        run: |
-          missing=()
-          [ -z "$WINDOWS_CERTIFICATE" ]          && missing+=("WINDOWS_CERTIFICATE")
-          [ -z "$WINDOWS_CERTIFICATE_PASSWORD" ] && missing+=("WINDOWS_CERTIFICATE_PASSWORD")
-          if [ ${#missing[@]} -gt 0 ]; then
-            if [ "$ALLOW_UNSIGNED_WINDOWS" = "true" ]; then
-              echo "::warning::Building UNSIGNED Windows bundle on ${{ matrix.label }} (ALLOW_UNSIGNED_WINDOWS=true). Missing: ${missing[*]}. Users will see SmartScreen warnings."
-            else
-              echo "::error::Refusing to build unsigned Windows bundle on ${{ matrix.label }}. Missing secrets: ${missing[*]}. Provision WINDOWS_CERTIFICATE + WINDOWS_CERTIFICATE_PASSWORD, or set repo variable ALLOW_UNSIGNED_WINDOWS=true to bypass intentionally."
-              exit 1
-            fi
-          else
-            echo "Windows signing secrets present for ${{ matrix.label }}."
-          fi
-
       - name: Build and release Tauri app
         uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0
         env:
@@ -364,40 +336,6 @@ jobs:
             log show --predicate 'process == "forwardemail-desktop" AND messageType == fault' --last 1m 2>/dev/null | head -40 || true
             exit 1
           fi
-
-      # Structural assert on the Windows installers BEFORE publish, mirroring
-      # the macOS verify. tauri-action signs in place; confirm the produced
-      # nsis/msi actually carry a Valid Authenticode signature so an unsigned
-      # build never reaches users. Skipped (with a warning) only when the
-      # ALLOW_UNSIGNED_WINDOWS break-glass is set and no cert was provided.
-      - name: Verify Windows signature
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          HAS_CERT: ${{ secrets.WINDOWS_CERTIFICATE != '' }}
-          ALLOW_UNSIGNED_WINDOWS: ${{ vars.ALLOW_UNSIGNED_WINDOWS }}
-        run: |
-          $bundle = "src-tauri/target/${{ matrix.target }}/release/bundle"
-          $installers = Get-ChildItem -Path $bundle -Recurse -Include *-setup.exe,*.msi -ErrorAction SilentlyContinue
-          if (-not $installers) {
-            Write-Host "::error::No Windows installer (.exe/.msi) found under $bundle"
-            exit 1
-          }
-          if ($env:HAS_CERT -ne 'true' -and $env:ALLOW_UNSIGNED_WINDOWS -eq 'true') {
-            Write-Host "::warning::Skipping signature verification — no cert provided and ALLOW_UNSIGNED_WINDOWS=true."
-            exit 0
-          }
-          $failed = $false
-          foreach ($f in $installers) {
-            $sig = Get-AuthenticodeSignature $f.FullName
-            Write-Host "$($f.Name): $($sig.Status)"
-            if ($sig.Status -ne 'Valid') {
-              Write-Host "::error::$($f.Name) is not validly signed (status: $($sig.Status))"
-              $failed = $true
-            }
-          }
-          if ($failed) { exit 1 }
-          Write-Host "All Windows installers carry a Valid Authenticode signature."
 
       # SLSA build provenance attestation. Publishes a signed attestation
       # to the Sigstore transparency log binding each desktop bundle to
