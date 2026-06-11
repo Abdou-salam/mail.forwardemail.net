@@ -124,11 +124,11 @@
   );
   const subject = $derived((lastMessage as Message)?.subject || '(No subject)');
   const snippet = $derived(truncatePreview((lastMessage as Message)?.snippet || ''));
-  const date = $derived(
-    formatCompactDate(
-      (lastMessage as Message)?.date || (lastMessage as Message)?.dateMs || Date.now(),
-    ),
-  );
+  // Do NOT fall back to Date.now() for a missing date — that's the bug where a
+  // bulk sync made every message read as if it arrived now. Show nothing when
+  // there's genuinely no timestamp (the normalizer leaves dateMs = 0).
+  const dateTs = $derived((lastMessage as Message)?.date || (lastMessage as Message)?.dateMs || 0);
+  const date = $derived(dateTs ? formatCompactDate(dateTs) : '');
   const unread = $derived(
     threaded ? (item as ConversationItem)?.is_unread : (lastMessage as Message)?.is_unread,
   );

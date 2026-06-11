@@ -223,18 +223,48 @@ describe('normalizeMessageForCache date handling', () => {
     expect(normalized.dateMs).toBeLessThan(after);
   });
 
-  it('prefers server created_at over header date', () => {
-    const created = new Date('2025-06-01T12:00:00Z').getTime();
-    const header = new Date('2025-06-01T13:30:00Z').getTime();
+  it('prefers internal_date (server receive time) over created_at', () => {
+    // internal_date is the IMAP INTERNALDATE — the real receive time. created_at
+    // is the DB record's insert time (≈ sync time on a freshly built per-mailbox
+    // store), so it must NOT win. This is the bulk-sync "every email arrived now"
+    // regression.
+    const internal = new Date('2025-06-01T12:00:00Z').getTime();
+    const inserted = new Date('2025-06-10T09:00:00Z').getTime(); // later "sync" time
     const raw = {
       Uid: 2,
-      Subject: 'Created_at wins',
+      Subject: 'internal_date wins',
       From: { Email: 's@example.com' },
-      created_at: new Date(created).toISOString(),
-      header_date: new Date(header).toISOString(),
+      internal_date: new Date(internal).toISOString(),
+      created_at: new Date(inserted).toISOString(),
     };
     const normalized = normalizeMessageForCache(raw, 'INBOX', 'acct');
-    expect(normalized.dateMs).toBe(created);
+    expect(normalized.dateMs).toBe(internal);
+  });
+
+  it('prefers header_date over created_at when internal_date is absent', () => {
+    const header = new Date('2025-06-01T13:30:00Z').getTime();
+    const inserted = new Date('2025-06-10T09:00:00Z').getTime();
+    const raw = {
+      Uid: 2,
+      Subject: 'header beats created_at',
+      From: { Email: 's@example.com' },
+      header_date: new Date(header).toISOString(),
+      created_at: new Date(inserted).toISOString(),
+    };
+    const normalized = normalizeMessageForCache(raw, 'INBOX', 'acct');
+    expect(normalized.dateMs).toBe(header);
+  });
+
+  it('uses created_at as a last resort when no other date is present', () => {
+    const inserted = new Date('2025-06-10T09:00:00Z').getTime();
+    const raw = {
+      Uid: 2,
+      Subject: 'created_at fallback',
+      From: { Email: 's@example.com' },
+      created_at: new Date(inserted).toISOString(),
+    };
+    const normalized = normalizeMessageForCache(raw, 'INBOX', 'acct');
+    expect(normalized.dateMs).toBe(inserted);
   });
 
   it('uses date field when created_at is absent', () => {

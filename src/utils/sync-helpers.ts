@@ -246,18 +246,20 @@ export function normalizeMessageForCache(
   // causing distinct messages to collide and overwrite each other in IDB.
   const apiId = (raw.id as string) || (raw.Id as string);
   const uid = (raw.Uid as number) || (raw.uid as number) || null;
-  // Prefer server receive time (created_at) over sender's clock (header_date)
-  // to ensure new messages sort to the top regardless of sender clock skew.
-  // Never fall back to Date.now() — a missing date field on the server
-  // payload must not silently stamp the message with the sync time
-  // (that produced bulk-sync results where every email appeared to have
-  // arrived at the moment of sync).
+  // Prefer internal_date — the IMAP INTERNALDATE / true server receive time.
+  // It is reliable for both display and sort (server-assigned, not subject to
+  // sender clock skew). created_at is the DB record's INSERT time, NOT the
+  // message's receive time: the backend builds each per-mailbox SQLite store
+  // lazily, so on a fresh sync every created_at ≈ the moment of sync — which is
+  // exactly the "every email arrived at the moment of sync" bug. Keep created_at
+  // only as a last resort. Never fall back to Date.now() (dateMs stays 0 when a
+  // date is truly absent; the UI must not stamp the sync time).
   const dateVal =
-    (raw.created_at as string | number) ||
+    (raw.internal_date as string) ||
     (raw.date as string | number) ||
     (raw.Date as string | number) ||
-    (raw.internal_date as string) ||
     (raw.header_date as string) ||
+    (raw.created_at as string | number) ||
     (raw.received_at as string);
   const parsedDate = dateVal ? new Date(dateVal) : null;
   const dateMs = parsedDate && Number.isFinite(parsedDate.getTime()) ? parsedDate.getTime() : 0;

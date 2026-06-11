@@ -92,13 +92,16 @@
     const apiId = raw.id || raw.Id;
     const uid = raw.Uid || raw.uid || null;
 
-    // Prefer server receive time over the sender's clock; never stamp Date.now().
+    // Prefer internal_date (IMAP INTERNALDATE / true server receive time).
+    // created_at is the DB record's INSERT time (≈ sync time on a freshly-built
+    // store), so it's only a last resort. Never stamp Date.now().
+    // Keep in lockstep with normalizeMessageForCache in src/utils/sync-helpers.ts.
     const dateVal =
-      raw.created_at ||
+      raw.internal_date ||
       raw.date ||
       raw.Date ||
-      raw.internal_date ||
       raw.header_date ||
+      raw.created_at ||
       raw.received_at;
     const parsedDate = dateVal ? new Date(dateVal) : null;
     const dateMs = parsedDate && Number.isFinite(parsedDate.getTime()) ? parsedDate.getTime() : 0;
