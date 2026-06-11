@@ -84,30 +84,43 @@ test.describe('Desktop — Reply & Forward', () => {
 // ── Message Actions ─────────────────────────────────────────────────────────
 
 test.describe('Desktop — Message Actions', () => {
-  test('delete button triggers message deletion', async ({ page }, testInfo) => {
+  test('delete moves the message to Trash via the API', async ({ page }, testInfo) => {
     await selectMessageBySubject(page, 'Your calendar invite');
     await waitForReaderToOpen(page, testInfo);
 
-    // The reader should show action buttons
     const reader = page.locator('.fe-reader');
     await expect(reader).toBeVisible();
 
+    // A non-permanent delete from Inbox is a move-to-Trash: PUT /v1/messages/:id
+    // with { folder }. Assert the network mutation actually fires (demo mode
+    // blocks this) — not just the optimistic UI removal.
+    const moveReq = page.waitForRequest(
+      (r) => /\/v1\/messages\//.test(r.url()) && r.method() === 'PUT',
+      { timeout: 8000 },
+    );
     await clickDeleteInReader(page);
-    // Optimistic update removes the deleted message row from the list immediately.
+    const req = await moveReq;
+    expect(String(req.postDataJSON()?.folder || '').toUpperCase()).toBe('TRASH');
+    // Optimistic update also removes the row from the list.
     await expect(
       page.locator('[data-conversation-row]', { hasText: 'Your calendar invite' }),
     ).toHaveCount(0, { timeout: 5000 });
   });
 
-  test('archive button triggers message archive', async ({ page }, testInfo) => {
+  test('archive moves the message to Archive via the API', async ({ page }, testInfo) => {
     await selectMessageBySubject(page, 'Welcome to Webmail');
     await waitForReaderToOpen(page, testInfo);
 
     const reader = page.locator('.fe-reader');
     await expect(reader).toBeVisible();
 
+    const moveReq = page.waitForRequest(
+      (r) => /\/v1\/messages\//.test(r.url()) && r.method() === 'PUT',
+      { timeout: 8000 },
+    );
     await clickArchiveInReader(page);
-    // Optimistic update removes the archived message from the INBOX list.
+    const req = await moveReq;
+    expect(String(req.postDataJSON()?.folder || '')).toBe('Archive');
     await expect(
       page.locator('[data-conversation-row]', { hasText: 'Welcome to Webmail' }),
     ).toHaveCount(0, { timeout: 5000 });
