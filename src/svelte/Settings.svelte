@@ -1408,6 +1408,25 @@
         }
       }
 
+      // The HTTP cache + service worker above don't touch IndexedDB, where the
+      // mailbox actually lives — so a folder emptied on the server still showed
+      // stale rows after "Clear Cache" (only "Complete Reset" fixed it). Drop the
+      // mail-view caches so the next load reconciles from the server. Drafts,
+      // outbox, settings and the signed-in account are intentionally kept — that
+      // is what separates this from a full reset.
+      try {
+        await Promise.all([
+          db.messages.clear(),
+          db.messageBodies.clear(),
+          db.folders.clear(),
+          db.syncManifests?.clear?.(),
+          db.searchIndex.clear(),
+          db.indexMeta.clear(),
+        ]);
+      } catch (dbErr) {
+        console.warn('[Settings] Failed to clear mail cache tables:', dbErr);
+      }
+
       setSuccess('Cache cleared. Reloading...');
       toasts?.show?.('Cache cleared. Reloading...', 'success');
       setTimeout(() => {

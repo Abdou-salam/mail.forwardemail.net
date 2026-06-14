@@ -1014,6 +1014,42 @@ const createMailboxStore = () => {
         merged = await mergeMissingFrom(bulkGetMessages, account, merged);
       }
 
+      // Server-confirmed-empty: when the folder's own metadata reports zero
+      // messages AND this basic page-1 fetch returned none, the folder is
+      // *genuinely* empty — not a transient stale read — so reconcile the cache
+      // instead of keeping stale rows. Without this, a folder emptied on another
+      // client (Thunderbird/phone) never cleared on refresh; only a full reset
+      // did. serverTotal is null when the count is unknown, so we fall through to
+      // the transient guard below and keep the cache in that case.
+      const isBasicPage1 =
+        !shouldAppend &&
+        currentPage === 1 &&
+        !queryParam &&
+        !get(unreadOnly) &&
+        !get(hasAttachmentsOnly);
+      if (isBasicPage1 && merged.length === 0 && serverTotal === 0) {
+        if (!isStaleRequest) {
+          if (!isDemoMode()) {
+            try {
+              await db.messages.where('[account+folder]').equals([account, folder]).delete();
+              await db.messageBodies.where('[account+folder]').equals([account, folder]).delete();
+            } catch (clearErr) {
+              console.warn('[mailbox] Failed to clear empty folder cache:', clearErr);
+            }
+            const staleIds = cachedPage
+              .map((m: { id?: string }) => m.id)
+              .filter(Boolean) as string[];
+            if (staleIds.length) searchStore.actions.removeFromIndex(staleIds).catch(() => {});
+          }
+          messages.set([]);
+          hasNextPage.set(false);
+          loading.set(false);
+          error.set('');
+        }
+        tracer.end({ status: 'server_confirmed_empty_cleared' });
+        return;
+      }
+
       // Guard against transient empty responses: if the server returns zero
       // messages for a non-search, non-filtered page-1 request but we already
       // have cached data (in IDB or the current store), keep the existing
