@@ -110,12 +110,29 @@ export async function waitForTauriWebviewContext(
 }
 
 // Native-only check (Android): confirm a WebView exists in the UiAutomator2
-// native view hierarchy. getPageSource() in the NATIVE_APP context dumps native
-// XML (no chromedriver), so it's emulator-safe. wry's Android WebView is a
-// RustWebView extends android.webkit.WebView, so match "webview" loosely.
-export async function nativeHierarchyHasWebView(browser: WebdriverIO.Browser): Promise<boolean> {
-  const source = await browser.getPageSource();
-  return /webview/i.test(source);
+// native view hierarchy. We do NOT use getPageSource() here: serializing the
+// whole native tree to XML recurses into the WebView's web-content accessibility
+// subtree, which crashes the UiAutomator2 instrumentation on the software-GL CI
+// emulator ("...instrumentation process is not running (probably crashed)").
+// The `-android uiautomator` strategy searches the hierarchy natively (no XML
+// dump) and stops at the WebView node. classNameMatches catches wry's
+// RustWebView, which extends — and reports its a11y class as — WebView.
+export async function nativeHierarchyHasWebView(
+  browser: WebdriverIO.Browser,
+  timeoutMs = 15_000,
+): Promise<boolean> {
+  const uiSelector = 'new UiSelector().classNameMatches(".*[Ww]eb[Vv]iew.*")';
+  const deadline = Date.now() + timeoutMs;
+  do {
+    try {
+      const matches = await browser.findElements('-android uiautomator', uiSelector);
+      if (matches.length > 0) return true;
+    } catch {
+      // Transient UiAutomator2 hiccup — retry until the deadline.
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  } while (Date.now() < deadline);
+  return false;
 }
 
 export async function waitForFrontendReady(
