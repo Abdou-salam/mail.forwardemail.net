@@ -22,6 +22,7 @@
     localDateOf,
     buildVTimezone,
   } from '../utils/ical-datetime';
+  import { parseNaturalLanguage } from '../utils/calendar-nlp';
   import {
     expandRecurringEvents,
     getRecurrenceText,
@@ -828,79 +829,9 @@
     }
   };
 
-  const parseNaturalLanguage = (input: string) => {
-    if (!input) return null;
-
-    const result: {
-      title: string;
-      date?: string;
-      startTime?: string;
-      startMeridiem?: string;
-      endTime?: string;
-      endMeridiem?: string;
-    } = { title: input };
-
-    const tomorrowMatch = input.match(/\btomorrow\b/i);
-    const todayMatch = input.match(/\btoday\b/i);
-
-    if (tomorrowMatch) {
-      const tomorrow = new Date();
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      result.date = tomorrow.toISOString().split('T')[0];
-      result.title = input.replace(/\btomorrow\b/i, '').trim();
-    } else if (todayMatch) {
-      result.date = new Date().toISOString().split('T')[0];
-      result.title = input.replace(/\btoday\b/i, '').trim();
-    }
-
-    const timeMatch = input.match(
-      /(\d{1,2})(?::(\d{2}))?\s*(am|pm)?(?:\s*[-–]\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?)?/i,
-    );
-
-    if (timeMatch) {
-      const [full, h1, m1 = '00', mer1, h2, m2 = '00', mer2] = timeMatch;
-
-      let startH = parseInt(h1, 10);
-      const startM = m1;
-      let startMer = (mer1 || '').toUpperCase();
-
-      if (!startMer) {
-        startMer = startH >= 7 && startH <= 11 ? 'AM' : startH >= 12 ? 'PM' : 'AM';
-      }
-
-      if (startH > 12) {
-        startMer = startH >= 12 ? 'PM' : 'AM';
-        startH = startH > 12 ? startH - 12 : startH;
-      }
-
-      result.startTime = `${String(startH).padStart(2, '0')}:${startM}`;
-      result.startMeridiem = startMer;
-
-      if (h2) {
-        let endH = parseInt(h2, 10);
-        const endM = m2;
-        let endMer = (mer2 || mer1 || '').toUpperCase();
-
-        if (!endMer) {
-          endMer = endH >= 12 ? 'PM' : startMer;
-        }
-
-        if (endH > 12) {
-          endMer = 'PM';
-          endH = endH - 12;
-        }
-
-        result.endTime = `${String(endH).padStart(2, '0')}:${endM}`;
-        result.endMeridiem = endMer;
-      }
-
-      result.title = input.replace(timeMatch[0], '').trim();
-    }
-
-    result.title = result.title.replace(/\s+/g, ' ').trim();
-
-    return result;
-  };
+  // parseNaturalLanguage lives in src/utils/calendar-nlp.ts (unit-tested). It
+  // only treats a number as a time when it carries a meridiem or a colon, so
+  // titles starting with digits (years, counts, "1 on 1") aren't eaten.
 
   const applyParsedTitle = () => {
     if (!newEvent.title) return false;
