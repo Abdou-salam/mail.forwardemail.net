@@ -83,7 +83,11 @@ import {
   computePrunedIds,
   isStaleListRequest,
 } from './mailbox-store-helpers';
-import { createPendingDeleteTracker, createPendingFlagTracker } from './optimistic-trackers';
+import {
+  createPendingDeleteTracker,
+  createPendingFlagTracker,
+  createPendingInsertTracker,
+} from './optimistic-trackers';
 
 // Folders that are always protected from rename/delete
 const ALWAYS_PROTECTED = new Set(['INBOX', 'OUTBOX']);
@@ -116,6 +120,10 @@ const pendingFlagTracker = createPendingFlagTracker();
 const addPendingFlagMutation = pendingFlagTracker.add;
 const applyPendingFlagMutations = pendingFlagTracker.apply;
 const confirmFlagMutations = pendingFlagTracker.confirm;
+
+// Optimistically-inserted Sent messages, re-injected into Sent list responses
+// until the backend indexer makes the just-sent message queryable.
+const pendingInsertTracker = createPendingInsertTracker();
 
 const invalidateFolderInMemCache = (account, folder) => {
   const prefix = `${account}:${folder}:`;
@@ -717,9 +725,11 @@ const createMailboxStore = () => {
     const memCached = folderMessageCache.get(memKey);
     if (memCached?.messages?.length) {
       cachedPage = memCached.messages;
-      const nextMessages = shouldAppend
+      let nextMessages = shouldAppend
         ? mergeMessagePages(get(messages), cachedPage, MAX_LIVE_MESSAGES)
         : cachedPage;
+      // Keep a just-sent message visible in Sent until the indexer reports it.
+      if (folder === getSentFolderPath()) nextMessages = pendingInsertTracker.apply(nextMessages);
       messages.set(applyPendingFlagMutations(filterPendingDeletes(nextMessages)));
       hasNextPage.set(memCached.hasNextPage);
       loading.set(false);
@@ -1090,9 +1100,11 @@ const createMailboxStore = () => {
       const shouldPrune = !shouldAppend && cachedPage.length && merged.length;
 
       if (!isStaleRequest) {
-        const nextMessages = shouldAppend
+        let nextMessages = shouldAppend
           ? mergeMessagePages(get(messages), merged, MAX_LIVE_MESSAGES)
           : merged;
+        // Keep a just-sent message visible in Sent until the indexer reports it.
+        if (folder === getSentFolderPath()) nextMessages = pendingInsertTracker.apply(nextMessages);
         messages.set(applyPendingFlagMutations(filterPendingDeletes(nextMessages)));
         if (
           allowAutoSelect &&
@@ -1114,6 +1126,9 @@ const createMailboxStore = () => {
 
       confirmDeletes(new Set(merged.map((m) => m.id)));
       confirmFlagMutations(merged);
+      if (folder === getSentFolderPath()) {
+        pendingInsertTracker.confirm(new Set(merged.map((m) => m.id)));
+      }
 
       let prunedIds: string[] = [];
       // Demo mode is fully IndexedDB-free: WebKitGTK (Tauri's Linux WebView)
@@ -1148,7 +1163,12 @@ const createMailboxStore = () => {
           if (shouldPrune && !queueReadFailed) {
             tracer.stage('cache_prune_start');
             const serverIds = new Set(merged.map((msg) => msg.id).filter(Boolean));
-            const pendingIds = new Set(getPendingDeleteIds());
+            // Protect optimistically-inserted Sent messages from the prune too,
+            // until the server's list reports them.
+            const pendingIds = new Set([
+              ...getPendingDeleteIds(),
+              ...pendingInsertTracker.getIds(),
+            ]);
             prunedIds = computePrunedIds(cachedPage, { serverIds, pendingIds, queuedIds });
             if (prunedIds.length) {
               const pairs = prunedIds.map((id) => [account, id]);
@@ -1389,6 +1409,62 @@ const createMailboxStore = () => {
         (f.name || '').toUpperCase() === 'SENT ITEMS',
     );
     return match?.path || 'Sent';
+  };
+
+  // Surface a just-sent message in Sent immediately, without waiting for the
+  // backend indexer (10-30s) to make it queryable. `raw` is the MessageCreate
+  // response merged with the compose payload (id + envelope fields). We
+  // normalize it, persist it to IDB, register it with the pending-insert
+  // tracker (so a reload during the indexer-lag window re-injects it instead of
+  // pruning it), and prepend it to the live list when Sent is on screen. The
+  // real copy overwrites it by id once the sync catches up.
+  const applyOptimisticSentMessage = async (raw: unknown) => {
+    try {
+      if (!raw) return null;
+      const src = raw as Record<string, unknown>;
+      const account = (Local.get('email') as string) || 'default';
+      const sentFolder = getSentFolderPath() as string;
+      if (!sentFolder) return null;
+
+      const envelope = normalizeMessageForCache(src, sentFolder, account);
+      if (!envelope?.id) return null;
+      envelope.folder = sentFolder;
+      if (!envelope.dateMs) {
+        envelope.dateMs = Date.now();
+        envelope.date = envelope.dateMs;
+      }
+      // Sent copies are authored by the user — always read.
+      if (!envelope.flags?.length) envelope.flags = ['\\Seen'];
+      envelope.is_unread = false;
+      envelope.is_unread_index = 0;
+      envelope.__optimistic = true;
+
+      // Protect from the next loadMessages prune + re-inject into its replace.
+      pendingInsertTracker.add(envelope);
+
+      // Persist so it survives navigation/reload until the real sync replaces it
+      // (same id -> bulkPut overwrite, no duplicate). Best-effort: the cache is
+      // optional and can stall under WebKitGTK.
+      try {
+        await db.messages.put({ ...envelope, account, updatedAt: Date.now() });
+      } catch {
+        // Cache write is best-effort; the tracker still keeps it on screen.
+      }
+
+      // If the user is looking at Sent, show it now (dedup by id). `current` is
+      // already the processed live list, so just prepend the fresh envelope.
+      if (get(selectedFolder) === sentFolder) {
+        const current = get(messages) || [];
+        if (!current.some((m) => String(m?.id) === String(envelope.id))) {
+          messages.set([envelope, ...current]);
+        }
+      }
+      updateFolderUnreadCounts();
+      return envelope;
+    } catch (err) {
+      warn('[mailbox] applyOptimisticSentMessage failed', err);
+      return null;
+    }
   };
 
   const getDraftsFolderPath = () => {
@@ -2488,6 +2564,7 @@ const createMailboxStore = () => {
       getArchiveFolderPath,
       getTrashFolderPath,
       getSentFolderPath,
+      applyOptimisticSentMessage,
       getDraftsFolderPath,
       updateSelectedMessage,
       messageBody,

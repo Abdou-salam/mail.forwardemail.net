@@ -672,14 +672,18 @@ const composeMailboxView = writable(null);
 
 // After a successful send, surface the message in the Sent folder promptly
 // instead of waiting for the periodic background sync (reported: "send an email,
-// then go to Sent and have to wait for the sync"). Invalidate the Sent cache,
-// kick an immediate metadata sync for it, and reload if it's currently on
-// screen. Best-effort — never let this interfere with the send result.
-async function refreshSentFolderAfterSend() {
+// then go to Sent and have to wait for the sync"). When the MessageCreate
+// response is available (sentRaw), do an OPTIMISTIC insert so the message shows
+// instantly regardless of backend indexer lag; the sync below reconciles it to
+// the authoritative copy by id. Then invalidate the Sent cache, kick an
+// immediate metadata sync, and reload if it's currently on screen. Best-effort —
+// never let this interfere with the send result.
+async function refreshSentFolderAfterSend(sentRaw?: unknown) {
   try {
     const acct = Local.get('email') || 'default';
     const sentFolder = mailboxStore.actions.getSentFolderPath?.() as string | undefined;
     if (!sentFolder) return;
+    if (sentRaw) await mailboxStore.actions.applyOptimisticSentMessage?.(sentRaw);
     const upper = sentFolder.toUpperCase();
     mailboxStore.actions.invalidateFolderInMemCache?.(acct, sentFolder);
     const sentFolderRec = (get(mailboxStore.state.folders) || []).find(
@@ -706,7 +710,7 @@ if (composeRoot) {
       props: {
         toasts,
         mailboxView: composeMailboxView,
-        onSent(result?: { archive?: boolean; queued?: boolean }) {
+        onSent(result?: { archive?: boolean; queued?: boolean; sentCopy?: unknown }) {
           if (result?.archive) {
             const message = get(selectedMessage);
             if (message) {
@@ -717,7 +721,7 @@ if (composeRoot) {
           }
           // A queued (offline) send isn't in Sent yet — the outbox surfaces it
           // when it actually goes out, so only refresh on a real send.
-          if (!result?.queued) refreshSentFolderAfterSend();
+          if (!result?.queued) refreshSentFolderAfterSend(result?.sentCopy);
         },
         registerApi(api: typeof composeApi) {
           if (api) {
@@ -1058,6 +1062,7 @@ if (isTauriDesktop) {
             serverDraftId?: string;
             sourceMessageId?: string;
             sentCopyPayload?: Record<string, unknown>;
+            sentCopy?: unknown;
             toast?: { message: string; type?: string };
           }
         | undefined;
@@ -1181,7 +1186,7 @@ if (isTauriDesktop) {
       // Surface the just-sent message in Sent promptly (don't wait for the
       // periodic sync). Runs whether or not we archive the source; a queued
       // (offline) send isn't in Sent yet so it's skipped.
-      if (!result?.queued) refreshSentFolderAfterSend();
+      if (!result?.queued) refreshSentFolderAfterSend(result?.sentCopy);
 
       if (result?.archive) {
         const message = get(selectedMessage);

@@ -79,7 +79,7 @@
   import { getMessageApiId } from '../utils/sync-helpers';
   import { extractDisplayName, isValidEmail } from '../utils/address.ts';
   import { queueEmail } from '../utils/outbox-service';
-  import { saveSentCopy } from '../utils/sent-copy.js';
+  import { saveSentCopy, buildOptimisticSentSource } from '../utils/sent-copy.js';
   import { parseMailto, mailtoToPrefill } from '../utils/mailto';
   import {
     saveDraft,
@@ -2280,10 +2280,11 @@
 
   const saveSentCopyWrapper = async (payload: Record<string, unknown>) => {
     try {
-      await saveSentCopy(payload);
+      return await saveSentCopy(payload);
     } catch (err) {
       console.warn('[Compose] Failed to save sent copy:', err);
       toasts?.show?.('Message sent, but failed to save copy to Sent folder', 'warning');
+      return null;
     }
   };
 
@@ -2420,8 +2421,12 @@
       delete apiPayload._replyToMessageId;
       delete apiPayload._replyToMessageFolder;
       await Remote.request('Emails', apiPayload, { method: 'POST' });
+      // Captured from whichever Sent-copy save runs below, then handed to the
+      // main window so it can show the message in Sent instantly (optimistic
+      // insert) instead of waiting for the backend indexer.
+      let sentCopyResponse: unknown = null;
       if (!nativeWindow) {
-        await saveSentCopyWrapper(payload);
+        sentCopyResponse = await saveSentCopyWrapper(payload);
         // Mark original message as \Answered after successful reply
         markOriginalAsAnswered();
       } else {
@@ -2435,7 +2440,12 @@
         // The \Answered flag + draft cleanup still run in the main window
         // (those need IDB) — see the compose:sent handler in main.ts.
         try {
-          await saveSentCopy(payload, Local.get('email') || null, null, nativeSentFolder);
+          sentCopyResponse = await saveSentCopy(
+            payload,
+            Local.get('email') || null,
+            null,
+            nativeSentFolder,
+          );
         } catch (sentErr) {
           console.error('[Compose] Failed to save sent copy (native window):', sentErr);
         }
@@ -2488,6 +2498,7 @@
             replyToMessageFolder: payload._replyToMessageFolder || null,
           }
         : null;
+      const optimisticSent = buildOptimisticSentSource(payload, sentCopyResponse);
       reset();
       onSent?.({
         archive: shouldArchive,
@@ -2495,6 +2506,7 @@
         serverDraftId: serverDraftIdToDelete,
         sourceMessageId: msgIdToDelete,
         sentCopyPayload,
+        sentCopy: optimisticSent,
         toast: nativeWindow ? { message: 'Message sent', type: 'success' } : undefined,
       });
       if (nativeWindow) closeNativeWindow();

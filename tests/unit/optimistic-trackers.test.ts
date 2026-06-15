@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createPendingDeleteTracker,
   createPendingFlagTracker,
+  createPendingInsertTracker,
   PENDING_DELETE_TTL,
 } from '../../src/stores/optimistic-trackers';
 
@@ -130,5 +131,78 @@ describe('createPendingFlagTracker', () => {
     t.add('m1', { is_unread: false });
     t.clear();
     expect(t.apply([{ id: 'm1', is_unread: true }])).toEqual([{ id: 'm1', is_unread: true }]);
+  });
+});
+
+describe('createPendingInsertTracker', () => {
+  it('re-injects a pending insert missing from the list, at the front', () => {
+    const t = createPendingInsertTracker();
+    t.add({ id: 'sent1', dateMs: 100, subject: 'hi' });
+    const out = t.apply([{ id: 'a', dateMs: 50 }]);
+    expect(out).toEqual([
+      { id: 'sent1', dateMs: 100, subject: 'hi' },
+      { id: 'a', dateMs: 50 },
+    ]);
+  });
+
+  it('does not duplicate an insert the server now reports', () => {
+    const t = createPendingInsertTracker();
+    t.add({ id: 'sent1', dateMs: 100 });
+    const server = [{ id: 'sent1', dateMs: 100, subject: 'authoritative' }];
+    // Already present -> passthrough, no optimistic copy prepended.
+    expect(t.apply(server)).toBe(server);
+  });
+
+  it('orders multiple pending inserts newest-first', () => {
+    const t = createPendingInsertTracker();
+    t.add({ id: 'older', dateMs: 100 });
+    t.add({ id: 'newer', dateMs: 200 });
+    const out = t.apply([{ id: 'a', dateMs: 50 }]);
+    expect(out.map((m) => m.id)).toEqual(['newer', 'older', 'a']);
+  });
+
+  it('returns the same array (no copy) when nothing is pending', () => {
+    const t = createPendingInsertTracker();
+    const msgs = [{ id: 'a' }];
+    expect(t.apply(msgs)).toBe(msgs);
+  });
+
+  it('ignores an entry with no id on add', () => {
+    const t = createPendingInsertTracker();
+    t.add({ dateMs: 1 });
+    expect(t.getIds()).toEqual([]);
+  });
+
+  it('confirm() drops an insert once the server reports its id (mirror of delete)', () => {
+    const t = createPendingInsertTracker();
+    t.add({ id: 'sent1', dateMs: 100 });
+    t.confirm(new Set(['sent1'])); // server now indexes it -> stop re-injecting
+    expect(t.getIds()).toEqual([]);
+    const msgs = [{ id: 'a' }];
+    expect(t.apply(msgs)).toBe(msgs);
+  });
+
+  it('confirm() keeps an insert the server has not indexed yet', () => {
+    const t = createPendingInsertTracker();
+    t.add({ id: 'sent1', dateMs: 100 });
+    t.confirm(new Set(['other'])); // server hasn't caught up
+    expect(t.getIds()).toEqual(['sent1']);
+  });
+
+  it('expires inserts after the TTL', () => {
+    const clock = makeClock(1000);
+    const t = createPendingInsertTracker({ now: clock.now, ttl: 1000 });
+    t.add({ id: 'sent1', dateMs: 100 });
+    clock.advance(1001);
+    expect(t.getIds()).toEqual([]);
+    const msgs = [{ id: 'a' }];
+    expect(t.apply(msgs)).toBe(msgs);
+  });
+
+  it('clear() removes everything', () => {
+    const t = createPendingInsertTracker();
+    t.add({ id: 'sent1', dateMs: 100 });
+    t.clear();
+    expect(t.getIds()).toEqual([]);
   });
 });

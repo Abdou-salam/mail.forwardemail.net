@@ -71,3 +71,32 @@ export const saveSentCopy = async (
 
   return response;
 };
+
+// Merge the MessageCreate response (server id + dates) with the compose payload
+// (recipients/subject/body) into a single object the mailbox store can normalize
+// into a Sent envelope for an optimistic insert. Returns null when the response
+// carries no server id — without one we can't dedup against the real copy the
+// sync will bring, so we skip the optimistic insert and fall back to sync only.
+//
+// Only the list-envelope fields are kept: attachment *content* is deliberately
+// dropped (we keep `has_attachment` for the paperclip), since on desktop this
+// object is serialized across the compose-window IPC and re-opening the message
+// reloads attachments from the server by id anyway.
+export const buildOptimisticSentSource = (emailPayload = {}, response = {}) => {
+  const id = response?.id || response?.Id || response?.data?.id;
+  if (!id) return null;
+  return {
+    id,
+    uid: response?.uid ?? response?.Uid ?? response?.data?.uid ?? null,
+    created_at: response?.created_at || response?.data?.created_at || null,
+    internal_date: response?.internal_date || response?.data?.internal_date || null,
+    from: emailPayload.from,
+    to: emailPayload.to || [],
+    cc: emailPayload.cc || [],
+    bcc: emailPayload.bcc || [],
+    subject: emailPayload.subject || '',
+    text: emailPayload.text,
+    has_attachment: emailPayload.has_attachment || (emailPayload.attachments?.length ?? 0) > 0,
+    flags: ['\\Seen'],
+  };
+};

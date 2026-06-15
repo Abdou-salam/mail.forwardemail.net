@@ -6,8 +6,14 @@
 //     that still includes them doesn't re-add them ("deleted message reappears").
 //   - pending FLAG mutations: read/star changes we applied locally, re-applied
 //     on top of list responses until the server confirms them.
+//   - pending INSERTS: a just-sent message we optimistically added to Sent,
+//     re-injected into list responses until the backend indexer makes it
+//     queryable ("send, open Sent, it's already there" instead of waiting for
+//     the sync). The mirror image of a pending delete: a delete is dropped when
+//     the server STOPS reporting the id; an insert is dropped when the server
+//     STARTS reporting it.
 //
-// Both auto-expire entries after PENDING_DELETE_TTL (60s — generous to cover
+// All auto-expire entries after PENDING_DELETE_TTL (60s — generous to cover
 // slow connections / queued sync tasks). The factories take an injectable
 // `now`/`ttl` purely so tests can drive expiry deterministically; production
 // callers use the defaults and get identical behavior to the inlined originals.
@@ -111,6 +117,57 @@ export function createPendingFlagTracker({
         } else if (p.is_starred !== undefined && msg.is_starred === p.is_starred) {
           pending.delete(id);
         }
+      }
+    },
+    clear() {
+      pending.clear();
+    },
+  };
+}
+
+export function createPendingInsertTracker({
+  now = () => Date.now(),
+  ttl = PENDING_DELETE_TTL,
+}: TrackerOptions = {}) {
+  const pending: Map<string, { msg: Record<string, unknown>; ts: number }> = new Map(); // id -> envelope
+
+  const prune = () => {
+    const t = now();
+    for (const [id, { ts }] of pending) {
+      if (t - ts > ttl) pending.delete(id);
+    }
+  };
+
+  return {
+    add(msg: Record<string, unknown>) {
+      const id = msg?.id as string;
+      if (!id) return;
+      pending.set(id, { msg, ts: now() });
+    },
+    // Re-add any still-pending inserts missing from the list, newest first, so a
+    // reload that predates the server indexing the new message keeps it on
+    // screen. (The caller scopes this to the relevant folder — the tracker only
+    // ever holds Sent inserts.)
+    apply(msgs: Record<string, unknown>[]) {
+      if (!pending.size) return msgs;
+      prune();
+      if (!pending.size) return msgs;
+      const present = new Set(msgs.map((m) => m.id));
+      const missing = [...pending.values()]
+        .map((e) => e.msg)
+        .filter((m) => !present.has(m.id))
+        .sort((a, b) => Number(b.dateMs ?? b.date ?? 0) - Number(a.dateMs ?? a.date ?? 0));
+      return missing.length ? [...missing, ...msgs] : msgs;
+    },
+    getIds(): string[] {
+      prune();
+      return [...pending.keys()];
+    },
+    confirm(serverIds: Set<string>) {
+      // Once the server's list reports the id, its authoritative copy renders on
+      // the next load — stop re-injecting the optimistic one.
+      for (const id of pending.keys()) {
+        if (serverIds.has(id)) pending.delete(id);
       }
     },
     clear() {

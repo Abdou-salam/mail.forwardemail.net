@@ -10,7 +10,7 @@ vi.mock('../../src/utils/sent-folder.js', () => ({
   resolveSentFolder: vi.fn(() => 'RESOLVED_FALLBACK'),
 }));
 
-import { buildSentCopyPayload } from '../../src/utils/sent-copy.js';
+import { buildSentCopyPayload, buildOptimisticSentSource } from '../../src/utils/sent-copy.js';
 import { resolveSentFolder } from '../../src/utils/sent-folder.js';
 
 describe('buildSentCopyPayload', () => {
@@ -57,5 +57,54 @@ describe('buildSentCopyPayload', () => {
     const payload = buildSentCopyPayload(baseEmail, 'me@example.com', null, 'Sent');
     expect(payload.attachments).toEqual([]);
     expect(payload.has_attachment).toBe(false);
+  });
+});
+
+describe('buildOptimisticSentSource', () => {
+  const email = {
+    from: 'me@example.com',
+    to: ['you@example.com'],
+    cc: ['cc@example.com'],
+    subject: 'Hi',
+    html: '<p>Body</p>',
+    text: 'Body',
+  };
+
+  it('merges the server id/date with the compose payload', () => {
+    const src = buildOptimisticSentSource(email, {
+      id: 'srv-123',
+      uid: 7,
+      created_at: '2026-06-15T12:00:00Z',
+    });
+    expect(src).toMatchObject({
+      id: 'srv-123',
+      uid: 7,
+      created_at: '2026-06-15T12:00:00Z',
+      from: 'me@example.com',
+      to: ['you@example.com'],
+      cc: ['cc@example.com'],
+      subject: 'Hi',
+      flags: ['\\Seen'],
+    });
+  });
+
+  it('returns null when the response carries no id (falls back to sync-only)', () => {
+    expect(buildOptimisticSentSource(email, {})).toBeNull();
+    expect(buildOptimisticSentSource(email, null)).toBeNull();
+  });
+
+  it('accepts an id from alternate response shapes (Id / data.id)', () => {
+    expect(buildOptimisticSentSource(email, { Id: 'cap-id' })?.id).toBe('cap-id');
+    expect(buildOptimisticSentSource(email, { data: { id: 'nested-id' } })?.id).toBe('nested-id');
+  });
+
+  it('derives has_attachment from the attachments array but drops the content', () => {
+    const src = buildOptimisticSentSource(
+      { ...email, attachments: [{ filename: 'a.pdf', content: 'base64' }] },
+      { id: 'x' },
+    );
+    expect(src.has_attachment).toBe(true);
+    // Attachment content is intentionally not carried in the optimistic envelope.
+    expect(src.attachments).toBeUndefined();
   });
 });
