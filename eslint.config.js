@@ -8,7 +8,9 @@ import tsPlugin from '@typescript-eslint/eslint-plugin';
 
 export default [
   {
-    ignores: ['dist/**', 'node_modules/**', 'src-tauri/**'],
+    // public/sw-message-normalize.js is a generated Vite bundle (see
+    // scripts/build-sw-normalize.mjs), not hand-written source — don't lint it.
+    ignores: ['dist/**', 'node_modules/**', 'src-tauri/**', 'public/sw-message-normalize.js'],
   },
   {
     files: ['**/*.{js,mjs,cjs}'],

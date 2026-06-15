@@ -15,32 +15,15 @@ const swNormalize = (
   }
 ).normalizeMessageRecord as (raw: RawArg, folder?: string, account?: string) => MsgRecord;
 
-// Fields where the two sync paths MUST agree, or a message ends up looking
-// different (or unqueryable) depending on which path populated the cache:
-// identity, the Dexie indexes, flags, threading and labels.
-const DATA_INTEGRITY_FIELDS = [
-  'id',
-  'account',
-  'folder',
-  'folder_id',
-  'date',
-  'dateMs',
-  'flags',
-  'is_unread',
-  'is_unread_index',
-  'is_starred',
-  'is_flagged',
-  'has_attachment',
-  'message_id',
-  'header_message_id',
-  'thread_id',
-  'root_id',
-  'uid',
-  'references',
-  'in_reply_to',
-  'labels',
-  'bodyIndexed',
-] as const;
+// The SW normalizer is now a bundle of the canonical function (#4b), so the two
+// outputs must be byte-for-byte identical — not just agree on a field subset.
+// `updatedAt` is the lone legitimate difference: it's stamped Date.now() per
+// call, so two invocations differ. Strip it before comparing.
+const stripVolatile = (m: MsgRecord): MsgRecord => {
+  const clone = { ...m };
+  delete clone.updatedAt;
+  return clone;
+};
 
 const ACCOUNT = 'user@example.com';
 const FOLDER = 'INBOX';
@@ -92,20 +75,59 @@ const FIXTURES: Array<{ name: string; raw: RawArg }> = [
       flags: [],
     },
   },
+  // The fixtures below exercise the fields the OLD hand-maintained SW normalizer
+  // got wrong (best-effort: no MIME-decode, no HTML-strip, partial from). With
+  // the bundled canonical they now reach full parity — these would have failed
+  // the deep-equality before #4b.
+  {
+    name: 'MIME-encoded subject + HTML-only body (snippet via strip)',
+    raw: {
+      id: 'srv-4',
+      folder: 'INBOX',
+      Subject: '=?UTF-8?B?SGVsbG8sIHdvcmxkIQ==?=',
+      html: '<style>.x{color:red}</style><p>Hi <b>there</b>,&nbsp;how are you?</p>',
+      from: '"Jane Doe" <jane@example.com>',
+      flags: ['\\Seen'],
+    },
+  },
+  {
+    name: 'from/to/cc objects + reply-to + nodemailer text snippet',
+    raw: {
+      id: 'srv-5',
+      folder: 'INBOX',
+      subject: 'Recipients',
+      from: { name: 'Acme', address: 'noreply@acme.test' },
+      to: [{ address: 'a@x.test' }, { name: 'Bee', address: 'b@x.test' }],
+      cc: 'c@x.test',
+      replyTo: { address: 'reply@acme.test' },
+      nodemailer: { text: 'plain text body for the snippet' },
+      flags: [],
+    },
+  },
+  {
+    name: 'mixed visible + hidden labels (hidden-label filtering)',
+    raw: {
+      id: 'srv-6',
+      folder: 'INBOX',
+      subject: 'Labels',
+      labels: ['Work', '\\Important', 'Personal', '[]'],
+      flags: ['\\Seen'],
+    },
+  },
 ];
 
-describe('message normalization contract: SW vs canonical', () => {
+describe('message normalization contract: SW bundle === canonical', () => {
   it('exposes the service-worker normalizer as a global', () => {
     expect(typeof swNormalize).toBe('function');
   });
 
   for (const { name, raw } of FIXTURES) {
-    it(`agrees on data-integrity fields — ${name}`, () => {
+    it(`matches the canonical normalizer exactly — ${name}`, () => {
       const canonical = normalizeMessageForCache(raw, FOLDER, ACCOUNT) as unknown as MsgRecord;
       const sw = swNormalize(raw, FOLDER, ACCOUNT);
-      for (const field of DATA_INTEGRITY_FIELDS) {
-        expect(sw[field], `field "${field}"`).toEqual(canonical[field]);
-      }
+      // Full structural equality — the SW bundle is the canonical function, so
+      // every field (including the once-divergent subject/snippet/from) agrees.
+      expect(stripVolatile(sw)).toEqual(stripVolatile(canonical));
     });
   }
 });
