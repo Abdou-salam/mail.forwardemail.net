@@ -669,6 +669,35 @@ let _mailboxApp = null;
 let mailboxApi = null;
 
 const composeMailboxView = writable(null);
+
+// After a successful send, surface the message in the Sent folder promptly
+// instead of waiting for the periodic background sync (reported: "send an email,
+// then go to Sent and have to wait for the sync"). Invalidate the Sent cache,
+// kick an immediate metadata sync for it, and reload if it's currently on
+// screen. Best-effort — never let this interfere with the send result.
+async function refreshSentFolderAfterSend() {
+  try {
+    const acct = Local.get('email') || 'default';
+    const sentFolder = mailboxStore.actions.getSentFolderPath?.() as string | undefined;
+    if (!sentFolder) return;
+    const upper = sentFolder.toUpperCase();
+    mailboxStore.actions.invalidateFolderInMemCache?.(acct, sentFolder);
+    const sentFolderRec = (get(mailboxStore.state.folders) || []).find(
+      (f) => f?.path?.toUpperCase?.() === upper,
+    );
+    if (sentFolderRec) {
+      const { startInitialSync } = await import('./utils/sync-controller.js');
+      startInitialSync(acct, [sentFolderRec], { wantBodies: false });
+    }
+    if (get(mailboxStore.state.selectedFolder) === sentFolder) {
+      await mailboxStore.actions.loadMessages?.();
+    }
+    mailboxStore.actions.updateFolderUnreadCounts?.();
+  } catch (err) {
+    console.warn('[main] Failed to refresh Sent folder after send:', err);
+  }
+}
+
 // Compose is now statically imported — mount synchronously.
 if (composeRoot) {
   try {
@@ -686,6 +715,9 @@ if (composeRoot) {
               });
             }
           }
+          // A queued (offline) send isn't in Sent yet — the outbox surfaces it
+          // when it actually goes out, so only refresh on a real send.
+          if (!result?.queued) refreshSentFolderAfterSend();
         },
         registerApi(api: typeof composeApi) {
           if (api) {
@@ -1145,6 +1177,11 @@ if (isTauriDesktop) {
           console.warn('[main] Failed to refresh reply targets after send:', error);
         }
       }
+
+      // Surface the just-sent message in Sent promptly (don't wait for the
+      // periodic sync). Runs whether or not we archive the source; a queued
+      // (offline) send isn't in Sent yet so it's skipped.
+      if (!result?.queued) refreshSentFolderAfterSend();
 
       if (result?.archive) {
         const message = get(selectedMessage);
