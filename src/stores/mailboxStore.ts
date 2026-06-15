@@ -236,7 +236,9 @@ const createMailboxStore = () => {
           );
           const items = Array.isArray(res) ? res : res?.data || res?.messages || [];
           if (items.length) {
-            const normalized = items.map((m) => normalizeMessageForCache(m, account, sentFolder));
+            const normalized = items.map((m) =>
+              normalizeMessageForCache(m, sentFolder as string, account as string),
+            );
             await db.messages.bulkPut(normalized).catch(() => {});
             sentMessages = normalized;
           }
