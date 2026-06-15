@@ -74,20 +74,83 @@ async function waitForPortFree(port: number, capMs = 6000): Promise<void> {
   // before this guard existed — no worse than the prior behaviour.
 }
 
+/** Reject after `ms` without disturbing the underlying promise. */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(label)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
+// Windows session-creation retry budget. The beforeAll hook ceiling is 30s, so
+// two capped attempts plus reclaims must fit comfortably under it:
+//   kill+wait (~4s) + attempt (10s) + kill+wait (~3.5s) + attempt (10s) ≈ 27.5s.
+// Healthy WebView2 session creation is fast (16/17 specs clear the 30s ceiling
+// with room to spare), so a 10s cap reliably separates a healthy launch — which
+// succeeds on attempt 1 — from a *stalled* handshake, which otherwise hangs for
+// webdriverio's full 120s default and trips the hook. A stall is killed at the
+// cap and retried against a freshly reclaimed port.
+const WIN_CONNECT_ATTEMPTS = 2;
+const WIN_CONNECT_ATTEMPT_MS = 10_000;
+
 export async function newBrowser(opts: RemoteOptions): Promise<WebdriverIO.Browser> {
-  // Pre-launch reclaim (Windows only). Before connecting, kill any app instance
-  // a prior spec left behind and wait for :4445 to actually free, so this
-  // session never races a dying instance for the port — the cascade that
-  // otherwise stalls newSession past the 30s beforeAll ceiling and reds the
-  // gate. On the first spec there's nothing to kill and the port is already
-  // free, so this costs ~one refused connect. No-op on macOS/Linux (see
-  // forceKillApp).
-  if (process.platform === 'win32') {
-    await forceKillApp();
-    await waitForPortFree(IN_APP_WEBDRIVER_PORT);
+  // macOS/Linux dismiss native dialogs reliably and don't exhibit the port
+  // cascade — keep the long-standing single, generously-bounded attempt so a
+  // slower-but-healthy launch there can't regress.
+  if (process.platform !== 'win32') {
+    current = await remote(opts);
+    return current;
   }
-  current = await remote(opts);
-  return current;
+
+  // Windows: reclaim any app a prior spec left holding :4445, then make a bounded
+  // number of attempts. webdriverio's own newSession retry is tightened
+  // (connectionRetryCount: 0, a short connectionRetryTimeout) so a stalled
+  // handshake fails fast and THIS loop — not the 30s hook timeout — owns the
+  // retry. Between attempts we kill the half-spawned app and wait for the port to
+  // free, so the next attempt starts clean.
+  await forceKillApp();
+  await waitForPortFree(IN_APP_WEBDRIVER_PORT, 3000);
+
+  const winOpts: RemoteOptions = {
+    connectionRetryTimeout: WIN_CONNECT_ATTEMPT_MS,
+    connectionRetryCount: 0,
+    ...opts,
+  };
+
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= WIN_CONNECT_ATTEMPTS; attempt++) {
+    const pending = remote(winOpts);
+    try {
+      current = await withTimeout(
+        pending,
+        WIN_CONNECT_ATTEMPT_MS,
+        `webdriver session creation exceeded ${WIN_CONNECT_ATTEMPT_MS}ms ` +
+          `(attempt ${attempt}/${WIN_CONNECT_ATTEMPTS})`,
+      );
+      return current;
+    } catch (err) {
+      lastErr = err;
+      // If the timed-out attempt resolves late, close its orphaned session so it
+      // doesn't keep holding :4445 (or surface as an unhandled rejection).
+      pending.then((b) => b?.deleteSession?.().catch(() => {})).catch(() => {});
+      if (attempt < WIN_CONNECT_ATTEMPTS) {
+        await forceKillApp();
+        await waitForPortFree(IN_APP_WEBDRIVER_PORT, 2500);
+      }
+    }
+  }
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error('newBrowser: webdriver session creation failed on win32');
 }
 
 export function currentBrowser(): WebdriverIO.Browser | undefined {
