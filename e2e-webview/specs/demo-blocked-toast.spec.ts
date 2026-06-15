@@ -57,21 +57,27 @@ describe('demo write actions are blocked with a toast', () => {
     // Wait for the confirm dialog to mount before confirming.
     const confirmBtn = await browser.$('[data-testid="confirm-dialog-confirm"]');
     await confirmBtn.waitForDisplayed({ timeout: 15_000 });
-    await nativeClick(browser, confirmBtn);
 
-    // Demo interceptor blocks MessageDelete and surfaces the toast. The
+    // The native click on the freshly-mounted confirm button is occasionally
+    // dropped on the slow macos-x64 runner — the dialog stays up and the delete
+    // never reaches Remote.request, so the demo interceptor never toasts. Make
+    // the confirm self-healing: re-issue the click each poll tick while the
+    // dialog is still open (idempotent once it closes), then look for the toast.
+    // The demo-blocked toast lives 15s, so once it fires this can't miss it. The
     // generic [data-testid="toast-message"] selector also matches transient
-    // status toasts ("search index built", "syncing", etc.), and on faster
-    // CI runners those can land in the slot before the demo toast and trip
-    // the assertion. Poll for the actual demo-blocked text instead of
-    // reading whichever toast happens to be on screen first.
+    // status toasts, so we poll for the actual "demo" text rather than reading
+    // whichever toast lands first. getText/isDisplayed are guarded because a
+    // toast/dialog element can detach mid-read on the webview driver.
     let toastText = '';
     await browser.waitUntil(
       async () => {
+        if (await confirmBtn.isDisplayed().catch(() => false)) {
+          await nativeClick(browser, confirmBtn).catch(() => {});
+        }
         const toasts = await browser.$$('[data-testid="toast-message"]');
         const len = await toasts.length;
         for (let i = 0; i < len; i++) {
-          const t = (await toasts[i].getText()).toLowerCase();
+          const t = (await toasts[i].getText().catch(() => '')).toLowerCase();
           if (t.includes('demo')) {
             toastText = t;
             return true;
@@ -80,7 +86,7 @@ describe('demo write actions are blocked with a toast', () => {
         return false;
       },
       {
-        timeout: 10_000,
+        timeout: 20_000,
         timeoutMsg: 'expected a toast containing "demo" after the blocked delete',
       },
     );
