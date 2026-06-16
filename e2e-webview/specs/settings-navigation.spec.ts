@@ -17,7 +17,7 @@ describe('settings navigation', () => {
         'tauri:options': { application: resolveAppBinary() },
       } as WebdriverIO.Capabilities,
     });
-  }, 30_000);
+  }, 60_000);
 
   afterAll(closeBrowser);
 

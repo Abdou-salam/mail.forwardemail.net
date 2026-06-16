@@ -17,7 +17,7 @@ describe('demo mode', () => {
         'tauri:options': { application: resolveAppBinary() },
       } as WebdriverIO.Capabilities,
     });
-  }, 30_000);
+  }, 60_000);
 
   afterAll(closeBrowser);
 

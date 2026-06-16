@@ -42,7 +42,7 @@ describe('attachment download/open', () => {
         'tauri:options': { application: resolveAppBinary() },
       } as WebdriverIO.Capabilities,
     });
-  }, 30_000);
+  }, 60_000);
 
   afterAll(closeBrowser);
 

@@ -42,7 +42,7 @@ describe('compose window open (reply)', () => {
         'tauri:options': { application: resolveAppBinary() },
       } as WebdriverIO.Capabilities,
     });
-  }, 30_000);
+  }, 60_000);
 
   afterAll(closeBrowser);
 

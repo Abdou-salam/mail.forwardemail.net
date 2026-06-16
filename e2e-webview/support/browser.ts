@@ -91,66 +91,43 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   });
 }
 
-// Windows session-creation retry budget. The beforeAll hook ceiling is 30s, so
-// two capped attempts plus reclaims must fit comfortably under it:
-//   kill+wait (~4s) + attempt (10s) + kill+wait (~3.5s) + attempt (10s) ≈ 27.5s.
-// Healthy WebView2 session creation is fast (16/17 specs clear the 30s ceiling
-// with room to spare), so a 10s cap reliably separates a healthy launch — which
-// succeeds on attempt 1 — from a *stalled* handshake, which otherwise hangs for
-// webdriverio's full 120s default and trips the hook. A stall is killed at the
-// cap and retried against a freshly reclaimed port.
-const WIN_CONNECT_ATTEMPTS = 2;
-const WIN_CONNECT_ATTEMPT_MS = 10_000;
+// Windows cold-start budget. On a fresh CI runner the first launch(es) of the
+// just-built debug `forwardemail-desktop.exe` get scanned by Windows Defender,
+// so the app can take ~20s+ to boot and bind :4445 (CI logs: first launch ~21s,
+// subsequent warm launches ~2-10s). Session creation must simply WAIT for that
+// in a SINGLE attempt — an earlier tight-cap retry killed the app mid-boot,
+// which only restarted the scan and cascaded `IncompleteMessage` into the next
+// spec. webdriverio's default 120s connectionRetryTimeout would mask a genuine
+// hang, so cap it here and let the (raised) 60s beforeAll ceiling backstop it.
+const WIN_SESSION_TIMEOUT_MS = 45_000;
 
 export async function newBrowser(opts: RemoteOptions): Promise<WebdriverIO.Browser> {
   // macOS/Linux dismiss native dialogs reliably and don't exhibit the port
-  // cascade — keep the long-standing single, generously-bounded attempt so a
-  // slower-but-healthy launch there can't regress.
+  // cascade or the Defender cold-scan — keep the long-standing single,
+  // generously-bounded attempt so a slower-but-healthy launch can't regress.
   if (process.platform !== 'win32') {
     current = await remote(opts);
     return current;
   }
 
-  // Windows: reclaim any app a prior spec left holding :4445, then make a bounded
-  // number of attempts. webdriverio's own newSession retry is tightened
-  // (connectionRetryCount: 0, a short connectionRetryTimeout) so a stalled
-  // handshake fails fast and THIS loop — not the 30s hook timeout — owns the
-  // retry. Between attempts we kill the half-spawned app and wait for the port to
-  // free, so the next attempt starts clean.
+  // Windows: reclaim any app a prior spec left holding :4445, then make ONE
+  // generously-bounded attempt. Do NOT retry-by-killing: the app is booting, not
+  // hung, and killing it restarts the slow Defender scan.
   await forceKillApp();
   await waitForPortFree(IN_APP_WEBDRIVER_PORT, 3000);
 
   const winOpts: RemoteOptions = {
-    connectionRetryTimeout: WIN_CONNECT_ATTEMPT_MS,
+    connectionRetryTimeout: WIN_SESSION_TIMEOUT_MS,
     connectionRetryCount: 0,
     ...opts,
   };
 
-  let lastErr: unknown;
-  for (let attempt = 1; attempt <= WIN_CONNECT_ATTEMPTS; attempt++) {
-    const pending = remote(winOpts);
-    try {
-      current = await withTimeout(
-        pending,
-        WIN_CONNECT_ATTEMPT_MS,
-        `webdriver session creation exceeded ${WIN_CONNECT_ATTEMPT_MS}ms ` +
-          `(attempt ${attempt}/${WIN_CONNECT_ATTEMPTS})`,
-      );
-      return current;
-    } catch (err) {
-      lastErr = err;
-      // If the timed-out attempt resolves late, close its orphaned session so it
-      // doesn't keep holding :4445 (or surface as an unhandled rejection).
-      pending.then((b) => b?.deleteSession?.().catch(() => {})).catch(() => {});
-      if (attempt < WIN_CONNECT_ATTEMPTS) {
-        await forceKillApp();
-        await waitForPortFree(IN_APP_WEBDRIVER_PORT, 2500);
-      }
-    }
-  }
-  throw lastErr instanceof Error
-    ? lastErr
-    : new Error('newBrowser: webdriver session creation failed on win32');
+  current = await withTimeout(
+    remote(winOpts),
+    WIN_SESSION_TIMEOUT_MS + 2000,
+    `webdriver session creation exceeded ${WIN_SESSION_TIMEOUT_MS}ms (Windows cold-start)`,
+  );
+  return current;
 }
 
 export function currentBrowser(): WebdriverIO.Browser | undefined {

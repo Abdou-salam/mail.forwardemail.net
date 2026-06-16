@@ -40,7 +40,7 @@ describe('mark folder as read (context menu)', () => {
         'tauri:options': { application: resolveAppBinary() },
       } as WebdriverIO.Capabilities,
     });
-  }, 30_000);
+  }, 60_000);
 
   afterAll(closeBrowser);
 
