@@ -45,7 +45,7 @@
     "tauri:android:build": "bash scripts/android-build.sh",
     "tauri:ios:dev": "bash scripts/ios-dev.sh",
     "tauri:ios:build": "bash scripts/ios-build.sh",
-    "tauri:icon": "tauri icon src-tauri/icons/app-icon.png",
+    "tauri:icon": "tauri icon src-tauri/app-icon-manifest.json",
     "tauri:signer:generate": "tauri signer generate -w ~/.tauri/forwardemail.key",
     "version": "node scripts/sync-version.cjs && git add src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock"
   },

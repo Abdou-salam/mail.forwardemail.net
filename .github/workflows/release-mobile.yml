@@ -106,6 +106,13 @@ jobs:
       - name: Initialize Android project
         run: pnpm tauri android init
 
+      # gen/ is gitignored and `tauri android init` scaffolds the DEFAULT
+      # Tauri launcher icons (it does not read src-tauri/icons/android), so
+      # regenerate from app-icon-manifest.json (brand bg #0a0e27 + 75%
+      # foreground scale) into the freshly-init'd gen project before building.
+      - name: Generate branded launcher icons
+        run: pnpm tauri:icon
+
       - name: Sync Android version
         run: node scripts/sync-version.cjs
 
@@ -329,6 +336,13 @@ jobs:
       - name: Initialize iOS project
         if: steps.check.outputs.enabled == 'true'
         run: pnpm tauri ios init --ci
+
+      # As with Android: init scaffolds the default Tauri icons into the
+      # gitignored gen/ project, so regenerate branded icons from the manifest
+      # before building the IPA.
+      - name: Generate branded app icons
+        if: steps.check.outputs.enabled == 'true'
+        run: pnpm tauri:icon
 
       - name: Sync version + inject iOS signing
         if: steps.check.outputs.enabled == 'true'
