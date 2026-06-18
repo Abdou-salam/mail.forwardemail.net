@@ -125,6 +125,11 @@
   let confirmTarget = $state<Contact | null>(null);
   let optionalFieldsExpanded = $state(false);
   let importMenuOpen = $state(false);
+  // Root-level (always-mounted) ref for the vCard file input. The input MUST
+  // live outside the dropdown menu: bits-ui unmounts the menu item on click, so
+  // an input nested inside it loses its onchange listener before the user
+  // finishes picking a file — the import then silently no-ops on web.
+  let vcardImportInput = $state<HTMLInputElement | undefined>(undefined);
   let lastAccount = Local.get('email') || '';
   let loadRequestId = 0;
   const CONTACTS_PAGE_SIZE = 500;
@@ -1262,27 +1267,38 @@
         </DropdownMenu.Trigger>
         <DropdownMenu.Content align="end">
           <DropdownMenu.Item
-            class="cursor-pointer p-0"
+            class="cursor-pointer gap-2 px-2 py-1.5"
             onclick={async (e) => {
-              if (!isTauriDesktop) return;
               e.preventDefault();
-              const files = await pickFiles({ accept: '.vcf,text/vcard' }).catch((err) => {
-                // The native macOS picker can return nil (see file-picker.ts);
-                // surface a clean message instead of an unhandled rejection.
-                error = 'Could not open the file picker — a known macOS issue we are working on.';
-                console.error('[contacts] vCard picker failed', err);
-                return null;
-              });
-              if (files) importVCard(files);
+              if (isTauriDesktop) {
+                const files = await pickFiles({ accept: '.vcf,text/vcard' }).catch((err) => {
+                  // The native macOS picker can return nil (see file-picker.ts);
+                  // surface a clean message instead of an unhandled rejection.
+                  error = 'Could not open the file picker — a known macOS issue we are working on.';
+                  console.error('[contacts] vCard picker failed', err);
+                  return null;
+                });
+                if (files) importVCard(files);
+              } else {
+                // Web: open the stable root-level input (see vcardImportInput).
+                vcardImportInput?.click();
+              }
             }}
           >
-            <label class="flex w-full cursor-pointer items-center gap-2 px-2 py-1.5">
-              <input type="file" accept=".vcf,text/vcard" onchange={importVCard} class="hidden" />
-              <span>Import vCard</span>
-            </label>
+            <span>Import vCard</span>
           </DropdownMenu.Item>
         </DropdownMenu.Content>
       </DropdownMenu.Root>
+      <!-- Stable, always-mounted vCard input. Lives OUTSIDE the dropdown so its
+           onchange survives the menu closing; opened via vcardImportInput.click()
+           on web, while desktop uses the native pickFiles() path above. -->
+      <input
+        bind:this={vcardImportInput}
+        type="file"
+        accept=".vcf,text/vcard"
+        onchange={importVCard}
+        class="hidden"
+      />
       <Button onclick={startNew}>
         <Plus class="mr-2 h-4 w-4" />
         New Contact
