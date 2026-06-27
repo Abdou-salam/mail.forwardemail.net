@@ -530,7 +530,9 @@ describe('folder-switch active message desync fix', () => {
     it('should have early-return guard using lastSelectedMessageId in selectMessage', () => {
       const fnStart = mailboxSrc.indexOf('const selectMessage = (msg');
       expect(fnStart).toBeGreaterThan(-1);
-      const fnSection = mailboxSrc.slice(fnStart, fnStart + 600);
+      // 800-char window (matches handleSelectFolder above): the desktop tab
+      // branch + its prefetch call sit ahead of the already-selected guard.
+      const fnSection = mailboxSrc.slice(fnStart, fnStart + 800);
       expect(fnSection).toContain('lastSelectedMessageId');
       expect(fnSection).toContain('$selectedMessage?.id');
     });
