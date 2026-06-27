@@ -58,6 +58,9 @@ let currentAccount = null;
 const backfillNoProgressStreakByFolder = new Map();
 const queuedKeys = new Set();
 const buildQueueKey = (task) => `${task.type}:${task.folder}`;
+// Max look-ahead bodies warmed per prefetch request. Small on purpose: a tight
+// worklist drains fast so it never meaningfully contends with a foreground open.
+const PREFETCH_LIMIT = 8;
 const pushTask = (task) => {
   const key = buildQueueKey(task);
   if (queuedKeys.has(key)) return false;
@@ -190,6 +193,17 @@ async function runTask(task) {
       },
       { timeout: 60000 },
     );
+  } else if (task.type === 'prefetch') {
+    // ID-targeted look-ahead body warm. limit is bounded by the id count so the
+    // worker never fans out beyond what we asked for.
+    await sendSyncTask(
+      {
+        ...task,
+        account: currentAccount,
+        limit: Math.min(task.messageIds?.length || PREFETCH_LIMIT, PREFETCH_LIMIT),
+      },
+      { timeout: 60000 },
+    );
   }
 }
 
@@ -212,15 +226,22 @@ async function pump() {
   const task = queue.shift();
   const taskAccount = currentAccount;
   queuedKeys.delete(buildQueueKey(task));
-  setStatus({ running: true, current: task, queue: [...queue] });
+  // Prefetch is a silent look-ahead: it must not flip the sync status to
+  // "running" or paint "Syncing…" in the progress UI on every selection.
+  const silent = task.type === 'prefetch';
+  if (silent) {
+    setStatus({ queue: [...queue] });
+  } else {
+    setStatus({ running: true, current: task, queue: [...queue] });
 
-  // Update progress with current task
-  syncProgress.update((p) => ({
-    ...p,
-    folder: task.folder,
-    stage: task.type,
-    message: `Syncing ${task.folder}...`,
-  }));
+    // Update progress with current task
+    syncProgress.update((p) => ({
+      ...p,
+      folder: task.folder,
+      stage: task.type,
+      message: `Syncing ${task.folder}...`,
+    }));
+  }
 
   inFlight = true;
   try {
@@ -238,7 +259,7 @@ async function pump() {
     setStatus({ running: false, current: null, queue: [] });
     return;
   }
-  setStatus({ running: false, current: null, queue: [...queue] });
+  setStatus(silent ? { queue: [...queue] } : { running: false, current: null, queue: [...queue] });
   setTimeout(pump, 30); // yield to UI
 }
 
@@ -321,6 +342,45 @@ export function queueBodiesForFolder(folder, account, opts = {}) {
     maxMessages: opts.maxMessages || settings.maxHeaders,
   });
   setStatus({ account: currentAccount, queue: [...queue] });
+  pump();
+}
+
+/**
+ * Warm the bodies of specific messages the user is likely to open next
+ * (adjacent rows, viewport, hover). ID-targeted and silent: it never drives the
+ * sync status UI and writes only to db.messageBodies, so the foreground reader
+ * later finds a warm cache entry instead of doing a cold network fetch.
+ *
+ * Replace-on-navigate: each call drops any still-queued prefetch task so the
+ * newest navigation target wins (the type:folder dedup key would otherwise
+ * silently drop the second request). Any already-in-flight prefetch is tiny and
+ * just finishes. Triggered only from imperative selection/scroll/hover handlers
+ * — never a reactive $effect — to avoid the select→load→effect→select loop that
+ * disabled the original prefetch.
+ */
+export function prefetchMessages(folder, account, ids = []) {
+  if (!folder) return;
+  const messageIds = (Array.isArray(ids) ? ids : []).filter(Boolean).slice(0, PREFETCH_LIMIT);
+  if (!messageIds.length) return;
+
+  const normalizedAccount = accountKey(account || currentAccount);
+  // Don't seed a stale account's queue; account switches reset the queue elsewhere.
+  if (currentAccount && currentAccount !== normalizedAccount) return;
+  currentAccount = normalizedAccount;
+
+  // Drop any pending (not-yet-started) prefetch task so the latest target wins.
+  queue = queue.filter((t) => {
+    if (t.type === 'prefetch') {
+      queuedKeys.delete(buildQueueKey(t));
+      return false;
+    }
+    return true;
+  });
+
+  // Front of queue: prefetch is time-sensitive (the user is looking at this list
+  // now) and small, so it runs ahead of low-priority backfill.
+  unshiftTask({ type: 'prefetch', folder, account: normalizedAccount, messageIds });
+  setStatus({ queue: [...queue] });
   pump();
 }
 

@@ -677,36 +677,80 @@ async function runBodiesTask(task, postProgress) {
     return;
   }
 
-  const headers = await db.messages.where('[account+folder]').equals([account, folder]).toArray();
-  headers.sort((a, b) => (b.date || b.dateMs || 0) - (a.date || a.dateMs || 0));
-  const sample = headers.slice(0, Math.min(maxMessages || headers.length, limit * 2));
-  const bodies = await db.messageBodies.bulkGet(sample.map((m) => [account, m.id]));
-  const worklist = worklistFromHeaders(sample, bodies, maxMessages).slice(0, limit);
+  // ID-targeted prefetch (adjacent / viewport / hover): warm exactly the
+  // messages the user is likely to open next, rather than the folder-wide
+  // newest-N pass. This writes only to db.messageBodies and never touches the
+  // main-thread render path, so it cannot desync the reader's header/body or
+  // disturb the cache-hit debounce — the foreground load just finds a warm
+  // cache entry later.
+  const idTargeted = Array.isArray(task.messageIds) && task.messageIds.length > 0;
+
+  // The db proxy resolves to `unknown`; cast to the minimal shapes used here so
+  // the worklist stays type-clean without leaning on `any`.
+  type BodyHeaderRecord = { id: string; date?: number; dateMs?: number; has_attachment?: boolean };
+  type BodyCacheRecord = { body?: string | null; attachments?: unknown[] };
+
+  let worklist;
+  if (idTargeted) {
+    const ids = task.messageIds.slice(0, limit) as string[];
+    const records = (await db.messages.bulkGet(
+      ids.map((id) => [account, id]),
+    )) as BodyHeaderRecord[];
+    const headers = records.filter(Boolean);
+    if (!headers.length) return;
+    const bodies = (await db.messageBodies.bulkGet(
+      headers.map((m) => [account, m.id]),
+    )) as BodyCacheRecord[];
+    worklist = worklistFromHeaders(headers, bodies, headers.length);
+  } else {
+    const headers = (await db.messages
+      .where('[account+folder]')
+      .equals([account, folder])
+      .toArray()) as BodyHeaderRecord[];
+    headers.sort((a, b) => (b.date || b.dateMs || 0) - (a.date || a.dateMs || 0));
+    const sample = headers.slice(0, Math.min(maxMessages || headers.length, limit * 2));
+    const bodies = (await db.messageBodies.bulkGet(
+      sample.map((m) => [account, m.id]),
+    )) as BodyCacheRecord[];
+    worklist = worklistFromHeaders(sample, bodies, maxMessages).slice(0, limit);
+  }
 
   if (!worklist.length) {
-    await updateManifest(account, folder, { hasBodiesPass: true, lastSyncAt: Date.now() });
+    // Only the folder-wide pass owns the "bodies done" manifest flag.
+    if (!idTargeted) {
+      await updateManifest(account, folder, { hasBodiesPass: true, lastSyncAt: Date.now() });
+    }
     return;
   }
 
   let completed = 0;
   for (const msg of worklist) {
+    // All prefetched ids come from the current folder list, so the task folder
+    // is the right one to cache under (and keeps types clean — HeaderLike has
+    // no `folder`).
     await fetchAndCacheBody(account, folder, msg, { returnPayload: false });
     completed += 1;
-    postProgress?.({
-      type: 'progress',
-      stage: 'bodies',
-      folder,
-      completed,
-      total: worklist.length,
-      target: maxMessages,
-    });
+    // Prefetch is silent: a handful of look-ahead bodies must not drive the
+    // "Downloading bodies X/Y" sync status UI.
+    if (!idTargeted) {
+      postProgress?.({
+        type: 'progress',
+        stage: 'bodies',
+        folder,
+        completed,
+        total: worklist.length,
+        target: maxMessages,
+      });
+    }
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
 
-  await updateManifest(account, folder, {
-    hasBodiesPass: completed >= worklist.length,
-    lastSyncAt: Date.now(),
-  });
+  if (!idTargeted) {
+    await updateManifest(account, folder, {
+      hasBodiesPass: completed >= worklist.length,
+      lastSyncAt: Date.now(),
+    });
+  }
 }
 
 async function fetchAndCacheBody(account, folder, msg, options = {}) {
@@ -1273,7 +1317,9 @@ async function handleTask(taskId, task) {
       summary = await runBackfillTask(task, (p) => {
         self.postMessage({ ...p, taskId });
       });
-    } else if (task.type === 'bodies') {
+    } else if (task.type === 'bodies' || task.type === 'prefetch') {
+      // 'prefetch' is an ID-targeted body warm; runBodiesTask branches on
+      // task.messageIds and stays silent (no progress, no manifest write).
       await runBodiesTask(task, (p) => {
         self.postMessage({ ...p, taskId });
       });

@@ -63,6 +63,7 @@
   import { createPerfTracer } from '../utils/perf-logger.ts';
   import { isLockEnabled, isVaultConfigured } from '../utils/crypto-store.js';
   import { getMessageApiId } from '../utils/sync-helpers.ts';
+  import { prefetchMessages } from '../utils/sync-controller.js';
   import { getSyncSettings } from '../utils/sync-settings.js';
   import { parseMailto, mailtoToPrefill } from '../utils/mailto';
   import MailtoPrompt from './components/MailtoPrompt.svelte';
@@ -1592,8 +1593,16 @@
       }
     });
 
-    // Adjacent body prefetch is handled by the sync worker's
-    // queueBodiesForFolder background task to avoid duplicate network calls.
+    // Warm the bodies of the adjacent messages so opening the next/previous one
+    // is instant. This is silent and off-main-thread: the sync worker writes
+    // db.messageBodies directly (deduped against already-cached bodies) and
+    // never touches the reader's render path, so it can't desync header/body.
+    const ids = messagesToPrefetch.map((m) => getMessageApiId(m)).filter(Boolean);
+    if (!ids.length) return;
+    const folder = get(selectedFolder);
+    if (!folder) return;
+    const account = currentItem.account || Local.get('email');
+    prefetchMessages(folder, account, ids);
   };
   const openReaderFullscreen = () => {
     if (mailboxView?.mobileReader?.set) {
@@ -1710,6 +1719,9 @@
     // Desktop: open message in its own tab (Thunderbird-style)
     if (isTauriDesktop && msg?.id) {
       openMessageTab(msg);
+      // Desktop returns here before the shared prefetch call below, so warm the
+      // neighbours' bodies on this path too — otherwise desktop never prefetches.
+      prefetchAdjacentMessages(msg);
       return;
     }
 
