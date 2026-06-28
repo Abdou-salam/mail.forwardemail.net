@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    iOS-only Info.plist additions. Tauri (v2.10) auto-discovers and MERGES this
+    file into the generated iOS bundle Info.plist at build time — see the
+    `bundle.iOS.infoPlist` schema note: "Tauri also looks for a `Info.plist` and
+    `Info.ios.plist` file in the same directory as the Tauri configuration file."
+    The generated src-tauri/gen/apple/.../Info.plist is gitignored and rebuilt
+    every CI run, so it MUST NOT be hand-edited; this merge file is the durable
+    surface. Keep macOS-only keys in src-tauri/Info.plist (shared/macOS), and
+    iOS-only keys here.
+  -->
+
+  <!--
+    Export-compliance declaration. The app uses only standard, exempt encryption
+    (HTTPS/TLS) and no proprietary/non-exempt cryptography. Declaring this as
+    false tells App Store Connect no export-compliance documentation is needed
+    and SUPPRESSES the per-build "Provide Export Compliance Information" prompt
+    that otherwise stalls every TestFlight build and blocks external Beta Review.
+  -->
+  <key>ITSAppUsesNonExemptEncryption</key>
+  <false/>
+
+  <!--
+    Photo library usage string. The compose attach flow and profile/contact
+    avatar pickers (e.g. Compose.svelte triggerImagePicker) can open the system
+    photo picker on iOS; this purpose string is required so the picker doesn't
+    crash/deny when a code path hits the legacy photo-library API. Declared as
+    the sole iOS permission in docs/store-submission.md (no camera key by design).
+  -->
+  <key>NSPhotoLibraryUsageDescription</key>
+  <string>Forward Email uses your photo library so you can attach photos to emails and set profile pictures.</string>
+</dict>
+</plist>
