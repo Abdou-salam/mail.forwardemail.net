@@ -7,6 +7,7 @@ import {
 } from './address.js';
 import { decodeMimeHeader } from './mime-utils.js';
 import { isHiddenLabel } from './label-filters';
+import { decodeLabelBuffer } from '../workers/sync-pure';
 import type { Message, MessageBody } from '$types';
 
 type RawMessage = Record<string, unknown> & {
@@ -285,31 +286,41 @@ export function normalizeMessageForCache(
     return normalized;
   };
 
-  const extractedLabels = Array.isArray(rawLabels)
-    ? rawLabels
-        .map((l) => {
-          if (typeof l === 'string') return normalizeLabel(l);
-          if (typeof l === 'number') return normalizeLabel(String(l));
-          if (l && typeof l === 'object') {
-            const lObj = l as LabelLike;
-            return normalizeLabel(
-              lObj.id || lObj.Id || lObj.keyword || lObj.value || lObj.name || lObj.label || '',
-            );
-          }
-          return '';
-        })
-        .filter(Boolean)
-    : typeof rawLabels === 'string'
-      ? (rawLabels as string)
-          .split(',')
-          .map((l: string) => normalizeLabel(l))
+  // Defensive: the list/folders endpoint can return `labels` as a serialized
+  // Buffer ({type:"Buffer", data:[...]}) instead of the decoded array the
+  // detail endpoint returns. Decode it first so the real label isn't mangled
+  // into the object's keys ("type","data") by the Object.entries branch below
+  // (or dropped). STOPGAP until the API returns a string array consistently.
+  const bufferLabels = decodeLabelBuffer(rawLabels);
+  const extractedLabels = bufferLabels
+    ? bufferLabels.map((l) => normalizeLabel(l)).filter(Boolean)
+    : Array.isArray(rawLabels)
+      ? rawLabels
+          .map((l) => {
+            if (typeof l === 'string') return normalizeLabel(l);
+            if (typeof l === 'number') return normalizeLabel(String(l));
+            if (l && typeof l === 'object') {
+              const lObj = l as LabelLike;
+              return normalizeLabel(
+                lObj.id || lObj.Id || lObj.keyword || lObj.value || lObj.name || lObj.label || '',
+              );
+            }
+            return '';
+          })
           .filter(Boolean)
-      : rawLabels && typeof rawLabels === 'object'
-        ? Object.entries(rawLabels as Record<string, unknown>)
-            .filter(([, enabled]) => enabled !== false && enabled !== null && enabled !== undefined)
-            .map(([label]) => normalizeLabel(label))
+      : typeof rawLabels === 'string'
+        ? (rawLabels as string)
+            .split(',')
+            .map((l: string) => normalizeLabel(l))
             .filter(Boolean)
-        : [];
+        : rawLabels && typeof rawLabels === 'object'
+          ? Object.entries(rawLabels as Record<string, unknown>)
+              .filter(
+                ([, enabled]) => enabled !== false && enabled !== null && enabled !== undefined,
+              )
+              .map(([label]) => normalizeLabel(label))
+              .filter(Boolean)
+          : [];
   const labels = extractedLabels.filter((l) => !isHiddenLabel(l));
 
   const isUnreadRaw =

@@ -4,6 +4,7 @@ import {
   toKey,
   accountKey,
   coerceLabelList,
+  decodeLabelBuffer,
   hasFromValue,
   hasMeaningfulDraft,
   buildDraftPayload,
@@ -60,6 +61,44 @@ describe('sync worker pure helpers', () => {
     it('returns [] for anything else', () => {
       expect(coerceLabelList(null)).toEqual([]);
       expect(coerceLabelList(42)).toEqual([]);
+    });
+
+    it('decodes the {type:"Buffer"} shape the list endpoint returns', () => {
+      // Real sample from the folders/list response for labels ["testtt-123"].
+      const buf = {
+        type: 'Buffer',
+        data: [139, 6, 128, 91, 34, 116, 101, 115, 116, 116, 116, 45, 49, 50, 51, 34, 93, 3],
+      };
+      expect(coerceLabelList(buf)).toEqual(['testtt-123']);
+    });
+  });
+
+  describe('decodeLabelBuffer', () => {
+    it('decodes a single-label buffer (real list-endpoint sample)', () => {
+      expect(
+        decodeLabelBuffer({
+          type: 'Buffer',
+          data: [139, 6, 128, 91, 34, 116, 101, 115, 116, 116, 116, 45, 49, 50, 51, 34, 93, 3],
+        }),
+      ).toEqual(['testtt-123']);
+    });
+
+    it('decodes a multi-label buffer (framed JSON array)', () => {
+      // Bytes for: <framing>["a","b-2"]<framing>
+      const json = '["a","b-2"]';
+      const data = [139, 6, 128, ...Array.from(json).map((c) => c.charCodeAt(0)), 3];
+      expect(decodeLabelBuffer({ type: 'Buffer', data })).toEqual(['a', 'b-2']);
+    });
+
+    it('returns null for non-buffer shapes so callers use normal handling', () => {
+      expect(decodeLabelBuffer(['work'])).toBeNull();
+      expect(decodeLabelBuffer('work')).toBeNull();
+      expect(decodeLabelBuffer(null)).toBeNull();
+      expect(decodeLabelBuffer({ type: 'Buffer' })).toBeNull();
+    });
+
+    it('returns [] for a malformed/unparseable buffer rather than garbage', () => {
+      expect(decodeLabelBuffer({ type: 'Buffer', data: [1, 2, 3] })).toEqual([]);
     });
   });
 

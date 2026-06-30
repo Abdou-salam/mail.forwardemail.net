@@ -16,6 +16,48 @@ export function accountKey(account: string | null | undefined): string {
   return account || 'default';
 }
 
+/**
+ * Decode the `{ type: "Buffer", data: [...] }` shape that the list/folders API
+ * returns for `labels` — the raw stored blob, framed around a JSON array —
+ * into a string array. The message-detail endpoint already returns a decoded
+ * array; this is a defensive STOPGAP for the list endpoint until it does the
+ * same. Returns `null` when `value` is not a Buffer shape so callers fall back
+ * to their normal array/string handling.
+ */
+export function decodeLabelBuffer(value: unknown): string[] | null {
+  if (
+    !value ||
+    typeof value !== 'object' ||
+    (value as { type?: unknown }).type !== 'Buffer' ||
+    !Array.isArray((value as { data?: unknown }).data)
+  ) {
+    return null;
+  }
+  const data = (value as { data: unknown[] }).data;
+  try {
+    // Built-in byte/string handling (no Node Buffer in the worker/browser).
+    const bytes = Uint8Array.from(data, (b) => Number(b) & 0xff);
+    const decoder = new TextDecoder();
+    // The blob frames a JSON array with a few non-ASCII codec bytes around it,
+    // so the whole thing isn't valid JSON. The label content is ASCII, so
+    // locate the bracketed JSON by byte and decode just that slice.
+    const open = bytes.indexOf(0x5b); // '['
+    const close = bytes.lastIndexOf(0x5d); // ']'
+    if (open !== -1 && close > open) {
+      const parsed: unknown = JSON.parse(decoder.decode(bytes.subarray(open, close + 1)));
+      if (Array.isArray(parsed)) {
+        return parsed.map((l) => String(l ?? '').trim()).filter(Boolean);
+      }
+    }
+    // Fallback: scan the decoded text for quoted tokens if the JSON didn't parse.
+    const tokens = decoder.decode(bytes).match(/"([^"\\]+)"/g);
+    if (tokens) return tokens.map((t) => t.slice(1, -1).trim()).filter(Boolean);
+  } catch {
+    // malformed buffer — fall through to empty
+  }
+  return [];
+}
+
 export function coerceLabelList(value: unknown): string[] {
   const normalizeLabel = (label: unknown) => {
     const normalized = String(label ?? '').trim();
@@ -31,6 +73,8 @@ export function coerceLabelList(value: unknown): string[] {
       .map((label) => normalizeLabel(label))
       .filter(Boolean);
   }
+  const buffered = decodeLabelBuffer(value);
+  if (buffered !== null) return buffered;
   return [];
 }
 
