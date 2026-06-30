@@ -7653,7 +7653,7 @@
               {:else if $selectedMessage}
                 {#if isProductivityLayout || $mobileReader}
                   <div
-                    class="sticky top-0 z-20 bg-[var(--color-panel)] flex items-center gap-2 p-2 border-b border-border"
+                    class="fe-reader-toolbar sticky top-0 z-20 bg-[var(--color-panel)] flex items-center gap-2 p-2 border-b border-border"
                     style="padding-top: max(0.5rem, env(safe-area-inset-top, 0px))"
                   >
                     <button
@@ -9263,6 +9263,41 @@
   :global(.fe-layout-productivity .fe-reader) {
     padding: 10px;
     min-height: 0;
+  }
+
+  /* The reader toolbar is sticky (top:0) inside the padded, scrolling
+     .fe-reader. Pull it full-bleed sideways (margins mirror .fe-reader padding:
+     14px base, 10px productivity) so it spans edge to edge, and restore equal
+     inner padding so the buttons keep their inset. */
+  :global(.fe-reader) .fe-reader-toolbar {
+    margin-left: -14px;
+    margin-right: -14px;
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+  :global(.fe-layout-productivity .fe-reader) .fe-reader-toolbar {
+    margin-left: -10px;
+    margin-right: -10px;
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  /* The container's top padding sits ABOVE where the toolbar sticks (top:0
+     pins it below the padding, not at the true top), exposing the pane
+     background in that strip. A pseudo-element that rides with the toolbar
+     paints that strip with the toolbar's own background, sealing the gap
+     whether scrolled or not. Height matches the .fe-reader top padding. */
+  :global(.fe-reader) .fe-reader-toolbar::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 100%;
+    height: 14px;
+    background: var(--color-panel);
+  }
+  :global(.fe-layout-productivity .fe-reader) .fe-reader-toolbar::before {
+    height: 10px;
   }
 
   /* Mailbox wrapper needs flex layout to fill height */
