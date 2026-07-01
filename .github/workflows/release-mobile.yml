@@ -198,6 +198,52 @@ jobs:
               --input "$f"
           done
 
+      # --- Google Play Console upload (closed/open testing) -------------------
+      # Uploads the signed .aab to the configured Play track. Gated on the
+      # service-account secret so the build still succeeds (GitHub release only)
+      # when Play automation isn't set up. The track is the PLAY_TRACK repo/env
+      # variable (internal | alpha=closed | beta=open | a custom closed-track
+      # name), defaulting to internal. NOTE: Play rejects a duplicate
+      # versionCode, and versionCode is derived from the version
+      # (major*10000+minor*100+patch), so bump the app version for each Play
+      # upload — re-running the same version will fail here.
+      - name: Check Play Console upload secret
+        id: play_check
+        shell: bash
+        env:
+          SA: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT }}
+        run: |
+          if [ -z "$SA" ]; then
+            echo "::warning::Skipping Play Console upload — GOOGLE_PLAY_SERVICE_ACCOUNT not set"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Locate AAB for Play upload
+        id: play_aab
+        if: steps.play_check.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          AAB=$(find src-tauri/gen/android/app/build/outputs/bundle \
+            -name 'forwardemail-mail_*_android.aab' -type f | head -n 1)
+          if [ -z "$AAB" ]; then
+            echo "::error::No .aab found for Play Console upload"
+            exit 1
+          fi
+          echo "path=$AAB" >> "$GITHUB_OUTPUT"
+          echo "Uploading $AAB to Play track '${{ vars.PLAY_TRACK || 'internal' }}'"
+
+      - name: Upload AAB to Google Play
+        if: steps.play_check.outputs.enabled == 'true'
+        uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT }}
+          packageName: net.forwardemail.mail
+          releaseFiles: ${{ steps.play_aab.outputs.path }}
+          track: ${{ vars.PLAY_TRACK || 'internal' }}
+          status: completed
+
       - name: Clean up keystore
         if: always()
         run: |
