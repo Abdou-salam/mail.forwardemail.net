@@ -227,12 +227,19 @@ export async function downloadAndInstall(updateInfo, onProgress) {
           });
         }
       } else if (event.event === 'Finished') {
-        log('download finished — install + relaunch starting');
+        log('download finished — installing');
         if (onProgress && typeof onProgress === 'function') {
           onProgress({ downloaded: contentLength, contentLength });
         }
       }
     });
+
+    // downloadAndInstall() applies the update but does NOT restart the app on
+    // its own (macOS/Linux). Without this relaunch the new version only appears
+    // after the user manually quits and reopens — exactly the reported bug.
+    log('install complete — relaunching to apply the update');
+    const { relaunch } = await import('@tauri-apps/plugin-process');
+    await relaunch();
   } catch (err) {
     // Translate the cryptic Tauri error into a user-friendly message
     const message = String(err?.message || err || '');
