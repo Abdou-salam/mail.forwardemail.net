@@ -1,4 +1,22 @@
 /**
+ * Resolve a header value to a string regardless of how simpleParser stored it.
+ * Headers may be plain strings, objects with .value/.text, or arrays of either.
+ * @param {unknown} val - Raw header value from nodemailer.headers
+ * @returns {string|null}
+ */
+function resolveHeaderValue(val) {
+  if (!val) return null;
+  if (typeof val === 'string') return val;
+  if (Array.isArray(val)) {
+    return val.map(resolveHeaderValue).filter(Boolean).join(' ');
+  }
+  if (typeof val === 'object') {
+    return val.value || val.text || val.initial || null;
+  }
+  return String(val);
+}
+
+/**
  * Extract "mailed-by" from received header or DKIM signature domain
  * @param {Object} msg - Message object with nodemailer headers
  * @returns {string|null} Mailed-by domain or null
@@ -8,16 +26,20 @@ export const getMailedBy = (msg) => {
   const headers = msg.nodemailer.headers;
 
   // Try to get from received header - look for "by <domain>" pattern
-  const received = headers.received;
+  const received = resolveHeaderValue(headers.received);
   if (received) {
-    const receivedStr = Array.isArray(received) ? received[0] : received;
-    const byMatch = receivedStr?.match(/by\s+([^\s(]+)/i);
+    const byMatch = received.match(/by\s+([^\s(]+)/i);
     if (byMatch) return byMatch[1];
   }
 
   // Fallback to DKIM signature domain
   const dkim = headers['dkim-signature'];
   if (dkim?.params?.d) return dkim.params.d;
+  const dkimStr = resolveHeaderValue(dkim);
+  if (dkimStr) {
+    const dMatch = dkimStr.match(/\bd=([^;\s]+)/i);
+    if (dMatch) return dMatch[1];
+  }
 
   return null;
 };
@@ -31,11 +53,19 @@ export const getSignedBy = (msg) => {
   if (!msg?.nodemailer?.headers) return null;
   const dkim = msg.nodemailer.headers['dkim-signature'];
   if (dkim?.params?.d) return dkim.params.d;
+  const dkimStr = resolveHeaderValue(dkim);
+  if (dkimStr) {
+    const dMatch = dkimStr.match(/\bd=([^;\s]+)/i);
+    if (dMatch) return dMatch[1];
+  }
   return null;
 };
 
 /**
- * Parse authentication-results headers for security info
+ * Parse authentication-results headers for security info.
+ * Handles multiple header formats: plain strings, structured objects,
+ * and arrays. Also falls back to dkim-signature and received-spf headers
+ * when authentication-results is absent.
  * @param {Object} msg - Message object with nodemailer headers
  * @returns {Object|null} Security info object with spf, dkim, dmarc, encryption
  */
@@ -47,12 +77,9 @@ export const getSecurityInfo = (msg) => {
   let hasAnyInfo = false;
 
   // Try arc-authentication-results first, then fall back to authentication-results
-  let authResults = headers['arc-authentication-results'] || headers['authentication-results'];
-
-  // Handle array of authentication results (multiple headers)
-  if (Array.isArray(authResults)) {
-    authResults = authResults.join(' ');
-  }
+  const rawAuthResults =
+    headers['arc-authentication-results'] || headers['authentication-results'];
+  const authResults = resolveHeaderValue(rawAuthResults);
 
   if (authResults) {
     // Parse SPF
@@ -77,12 +104,32 @@ export const getSecurityInfo = (msg) => {
     }
   }
 
+  // Fallback: check received-spf header if SPF not found in authentication-results
+  if (!results.spf) {
+    const receivedSpf = resolveHeaderValue(headers['received-spf']);
+    if (receivedSpf) {
+      const spfMatch = receivedSpf.match(/^(\w+)/i);
+      if (spfMatch) {
+        results.spf = spfMatch[1].toLowerCase();
+        hasAnyInfo = true;
+      }
+    }
+  }
+
+  // Fallback: infer DKIM presence from dkim-signature header
+  if (!results.dkim) {
+    const dkimSig = headers['dkim-signature'];
+    if (dkimSig) {
+      results.dkim = 'present';
+      hasAnyInfo = true;
+    }
+  }
+
   // Check for TLS in received header
-  const received = headers.received;
+  const received = resolveHeaderValue(headers.received);
   if (received) {
-    const receivedStr = Array.isArray(received) ? received.join(' ') : received;
-    if (receivedStr?.includes('TLS')) {
-      const tlsMatch = receivedStr.match(/version=(TLSv[\d.]+)/i);
+    if (received.includes('TLS') || received.includes('tls')) {
+      const tlsMatch = received.match(/version=(TLSv[\d.]+)/i);
       results.encryption = tlsMatch ? tlsMatch[1] : 'TLS';
       hasAnyInfo = true;
     }
@@ -110,7 +157,10 @@ export const formatSecurityStatus = (securityInfo) => {
     parts.push(`SPF: ${spfStatus}`);
   }
   if (securityInfo.dkim) {
-    const dkimStatus = securityInfo.dkim.charAt(0).toUpperCase() + securityInfo.dkim.slice(1);
+    const dkimStatus =
+      securityInfo.dkim === 'present'
+        ? 'Signed'
+        : securityInfo.dkim.charAt(0).toUpperCase() + securityInfo.dkim.slice(1);
     parts.push(`DKIM: ${dkimStatus}`);
   }
   if (securityInfo.dmarc) {

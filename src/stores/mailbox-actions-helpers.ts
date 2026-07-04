@@ -100,12 +100,35 @@ export const buildOriginalViewerPage = ({
     const headersEl = document.getElementById('headers');
     const rawEl = document.getElementById('raw');
     const decBlock = document.getElementById('decryptedBlock');
-    const decEl = document.getElementById('decrypted');
-    headersEl.textContent = DATA.headers || 'No headers found';
-    rawEl.textContent = DATA.raw || 'No original content available';
+    const decFrame = document.getElementById('decryptedFrame');
+    const decPre = document.getElementById('decryptedPre');
+    // Extract headers from raw source if not provided separately
+    const rawText = DATA.raw || '';
+    let displayHeaders = DATA.headers || '';
+    if (!displayHeaders && rawText) {
+      const divider = rawText.indexOf('\\n\\n');
+      if (divider > 0) displayHeaders = rawText.slice(0, divider).trim();
+    }
+    headersEl.textContent = displayHeaders || 'No headers available';
+    rawEl.textContent = rawText || 'No original content available';
+
+    // Show decrypted body if available (rendered HTML in sandboxed iframe, or plain text in pre)
     if (DATA.decrypted) {
-      decEl.textContent = DATA.decrypted;
       decBlock.style.display = 'block';
+      const isHtml = /<[a-z][\\s\\S]*>/i.test(DATA.decrypted);
+      if (isHtml) {
+        decFrame.style.display = 'block';
+        decFrame.srcdoc = DATA.decrypted;
+        decFrame.onload = () => {
+          try {
+            const h = decFrame.contentDocument.documentElement.scrollHeight;
+            decFrame.style.height = Math.min(h + 20, 600) + 'px';
+          } catch(e) {}
+        };
+      } else {
+        decPre.style.display = 'block';
+        decPre.textContent = DATA.decrypted;
+      }
     }
 
     const showToast = (message) => {
@@ -134,7 +157,7 @@ export const buildOriginalViewerPage = ({
     };
 
     document.getElementById('copyHeaders').onclick = async () => {
-      const success = await copyText(DATA.headers || '');
+      const success = await copyText(displayHeaders || '');
       showToast(success ? 'Headers copied to clipboard' : 'Failed to copy headers');
     };
     document.getElementById('copyRaw').onclick = async () => {
@@ -207,12 +230,13 @@ export const buildOriginalViewerPage = ({
       <pre id="headers"></pre>
     </div>
     <div>
-      <div class="label">Full source</div>
+      <div class="label">Raw source</div>
       <pre id="raw"></pre>
     </div>
     <div id="decryptedBlock" style="display:none;">
-      <div class="label">Decrypted body (text)</div>
-      <pre id="decrypted"></pre>
+      <div class="label">Decrypted body</div>
+      <iframe id="decryptedFrame" sandbox="allow-same-origin" style="display:none; width:100%; border:1px solid #e5e7eb; border-radius:8px; min-height:100px;"></iframe>
+      <pre id="decryptedPre" style="display:none;"></pre>
     </div>
   </div>
   <script>${safeScriptContent}</script>

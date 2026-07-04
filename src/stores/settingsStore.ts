@@ -906,6 +906,21 @@ export async function updateLabel(keyword: string, updates: Partial<Label>): Pro
       };
     }
 
+    // Prevent renaming to a name that already exists on a different label
+    if (updates.name) {
+      const trimmedName = updates.name.trim();
+      const duplicate = previousLabels.some(
+        (l, i) => i !== labelIndex && l.name?.trim() === trimmedName,
+      );
+      if (duplicate) {
+        return {
+          success: false,
+          error: 'A label with this name already exists',
+          status: 409,
+        };
+      }
+    }
+
     // Create updated labels array
     const updatedLabels = previousLabels.map((l, i) =>
       i === labelIndex ? { ...l, ...updates } : l,

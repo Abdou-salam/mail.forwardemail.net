@@ -2175,9 +2175,11 @@ export const viewOriginal = async (msg) => {
     }
   }
 
+  // Get decrypted text/html body for encrypted messages
   const decryptedText =
     content?.textContent ||
-    (typeof content?.body === 'string' && !looksLikeHtml(content.body) ? content.body : '');
+    (typeof content?.body === 'string' ? content.body : '');
+
   // Detect current theme from parent window
   const isLightMode =
     typeof document !== 'undefined' && document.body.classList.contains('light-mode');

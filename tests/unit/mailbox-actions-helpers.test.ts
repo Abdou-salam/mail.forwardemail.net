@@ -134,8 +134,22 @@ describe('buildOriginalViewerPage', () => {
     expect(light).not.toContain(`background: ${DARK_SURFACE.surface}`);
   });
 
-  it('carries the decrypted body into the embedded data', () => {
-    const page = buildOriginalViewerPage({ raw: 'r', decrypted: 'plaintext secret' });
-    expect(page).toContain('"decrypted":"plaintext secret"');
+  it('embeds raw source into the page data', () => {
+    const page = buildOriginalViewerPage({ raw: 'Subject: test\r\n\r\nHello body' });
+    expect(page).toContain('Subject: test');
+  });
+
+  it('includes decrypted body block when decrypted text is provided', () => {
+    const page = buildOriginalViewerPage({ raw: 'headers', decrypted: 'Hello decrypted' });
+    expect(page).toContain('"decrypted":"Hello decrypted"');
+    expect(page).toContain('decryptedBlock');
+    expect(page).toContain('decryptedFrame');
+    expect(page).toContain('decryptedPre');
+  });
+
+  it('hides decrypted block when no decrypted content is provided', () => {
+    const page = buildOriginalViewerPage({ raw: 'headers' });
+    expect(page).toContain('"decrypted":""');
+    expect(page).toContain('style="display:none;"');
   });
 });
