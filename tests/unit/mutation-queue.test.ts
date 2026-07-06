@@ -56,7 +56,9 @@ vi.mock('../../src/utils/platform.js', () => ({
 const metaStore = new Map<string, { key: string; value: unknown; updatedAt: number }>();
 
 async function drainMicrotasks() {
-  for (let i = 0; i < 5; i += 1) {
+  // Generous tick count: queue writes are serialized through a promise-chain
+  // lock, so a single logical operation now spans several await hops.
+  for (let i = 0; i < 25; i += 1) {
     await Promise.resolve();
   }
 }
@@ -310,6 +312,46 @@ describe('mutation-queue', () => {
     const after = metaStore.get(key)?.value as Array<{ status: string }>;
     expect(after).toHaveLength(1);
     expect(after[0].status).toBe('pending');
+  });
+
+  it('keeps a mutation enqueued while the processor is mid-flight (no lost update)', async () => {
+    // First mutation's API call blocks until we release it, keeping the
+    // processor's in-memory snapshot stale while a second mutation lands.
+    let releaseFirst!: () => void;
+    const firstCallGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    remoteRequestMock.mockImplementationOnce(async () => {
+      await firstCallGate;
+      return {};
+    });
+
+    await queueModule.queueMutation('toggleRead', {
+      messageId: 'm1',
+      isUnread: true,
+      flags: [],
+      folder: 'INBOX',
+    });
+    await drainMicrotasks(); // processor is now awaiting the gated API call
+
+    // Enqueue a second mutation while the processor holds its stale snapshot.
+    // (Its own processMutationQueue trigger is a no-op: `processing` is set.)
+    await queueModule.queueMutation('toggleStar', {
+      messageId: 'm2',
+      isStarred: false,
+      flags: [],
+      folder: 'INBOX',
+    });
+
+    releaseFirst();
+    await drainMicrotasks();
+
+    // m2 must survive the processor's final write (previously the stale
+    // snapshot write-back dropped it silently) and get executed by the
+    // processor's tail re-run instead of waiting for the 30s sweep.
+    expect(remoteRequestMock).toHaveBeenCalledTimes(2);
+    const record = metaStore.get('mutation_queue_user@example.com');
+    expect(record?.value).toEqual([]);
   });
 
   it('getMutationQueueCount reflects non-completed mutations', async () => {

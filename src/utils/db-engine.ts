@@ -14,8 +14,20 @@
  *     module-scoped Dexie instance; only one is ever active at a time.
  */
 
-import Dexie, { type Table, type TransactionMode } from 'dexie';
+import Dexie, { type IndexableType, type Table, type TransactionMode } from 'dexie';
 import { DB_NAME, SCHEMA_VERSION } from './db-constants.ts';
+import {
+  configureDbCrypto,
+  changesTouchSensitiveFields,
+  isDbCryptoActive,
+  getDbCryptoState,
+  openRecord,
+  openRecords,
+  sealRecord,
+  sealRecords,
+  recordIsSensitive,
+  SENSITIVE_TABLES,
+} from './db-crypto';
 
 // Type definitions for database tables
 interface Account {
@@ -317,12 +329,13 @@ async function ensureReady(): Promise<void> {
 
 async function tableGet(table: string, key: unknown): Promise<unknown> {
   await ensureReady();
-  return (db as unknown as Record<string, Table>)[table].get(key);
+  const record = await (db as unknown as Record<string, Table>)[table].get(key);
+  return openRecord(table, record);
 }
 
 async function tablePut(table: string, record: unknown): Promise<unknown> {
   await ensureReady();
-  return (db as unknown as Record<string, Table>)[table].put(record);
+  return (db as unknown as Record<string, Table>)[table].put(await sealRecord(table, record));
 }
 
 async function tableDelete(table: string, key: unknown): Promise<void> {
@@ -332,7 +345,21 @@ async function tableDelete(table: string, key: unknown): Promise<void> {
 
 async function tableUpdate(table: string, key: unknown, changes: unknown): Promise<number> {
   await ensureReady();
-  return (db as unknown as Record<string, Table>)[table].update(key, changes);
+  const tableObj = (db as unknown as Record<string, Table>)[table];
+  // When the change set touches sealed fields, Dexie's in-place update would
+  // write them as plaintext siblings of the envelope. Read-merge-reseal
+  // instead. The crypto must run OUTSIDE an IDB transaction (awaiting
+  // WebCrypto lets the transaction auto-commit), so this is a plain RMW —
+  // the same race window Dexie's own get-then-put callers already have.
+  if (isDbCryptoActive() && changesTouchSensitiveFields(table, changes)) {
+    const stored = await tableObj.get(key);
+    if (!stored) return 0;
+    const opened = (await openRecord(table, stored)) as Record<string, unknown>;
+    const merged = { ...opened, ...(changes as Record<string, unknown>) };
+    await tableObj.put(await sealRecord(table, merged));
+    return 1;
+  }
+  return tableObj.update(key, changes);
 }
 
 async function tableClear(table: string): Promise<void> {
@@ -347,12 +374,13 @@ async function tableCount(table: string): Promise<number> {
 
 async function tableBulkGet(table: string, keys: unknown[]): Promise<unknown[]> {
   await ensureReady();
-  return (db as unknown as Record<string, Table>)[table].bulkGet(keys);
+  const records = await (db as unknown as Record<string, Table>)[table].bulkGet(keys);
+  return openRecords(table, records);
 }
 
 async function tableBulkPut(table: string, records: unknown[]): Promise<unknown> {
   await ensureReady();
-  return (db as unknown as Record<string, Table>)[table].bulkPut(records);
+  return (db as unknown as Record<string, Table>)[table].bulkPut(await sealRecords(table, records));
 }
 
 async function tableBulkDelete(table: string, keys: unknown[]): Promise<void> {
@@ -362,7 +390,8 @@ async function tableBulkDelete(table: string, keys: unknown[]): Promise<void> {
 
 async function tableToArray(table: string): Promise<unknown[]> {
   await ensureReady();
-  return (db as unknown as Record<string, Table>)[table].toArray();
+  const records = await (db as unknown as Record<string, Table>)[table].toArray();
+  return openRecords(table, records);
 }
 
 // ============================================================================
@@ -391,7 +420,9 @@ async function queryEquals(
     query = query.reverse();
   }
   if (options.sortBy) {
-    return query.sortBy(options.sortBy);
+    // Sort fields are always plaintext (see PLAINTEXT_FIELDS), so sorting
+    // sealed records is stable; open them afterwards.
+    return openRecords(table, await query.sortBy(options.sortBy));
   }
   if (options.offset) {
     query = query.offset(options.offset);
@@ -400,12 +431,16 @@ async function queryEquals(
     query = query.limit(options.limit);
   }
 
-  return query.toArray();
+  return openRecords(table, await query.toArray());
 }
 
 async function queryEqualsFirst(table: string, index: string, value: unknown): Promise<unknown> {
   await ensureReady();
-  return (db as unknown as Record<string, Table>)[table].where(index).equals(value).first();
+  const record = await (db as unknown as Record<string, Table>)[table]
+    .where(index)
+    .equals(value)
+    .first();
+  return openRecord(table, record);
 }
 
 async function queryEqualsCount(table: string, index: string, value: unknown): Promise<number> {
@@ -425,7 +460,26 @@ async function queryEqualsModify(
   changes: unknown,
 ): Promise<number> {
   await ensureReady();
-  return (db as unknown as Record<string, Table>)[table].where(index).equals(value).modify(changes);
+  const tableObj = (db as unknown as Record<string, Table>)[table];
+  // Same sealed-field hazard as tableUpdate: cursor-path modify would write
+  // plaintext siblings of the envelope. Read-merge-reseal the matches
+  // (crypto outside any IDB transaction — see tableUpdate).
+  if (isDbCryptoActive() && changesTouchSensitiveFields(table, changes)) {
+    const stored = await tableObj
+      .where(index)
+      .equals(value as IndexableType)
+      .toArray();
+    if (!stored.length) return 0;
+    const resealed = await Promise.all(
+      stored.map(async (record) => {
+        const opened = (await openRecord(table, record)) as Record<string, unknown>;
+        return sealRecord(table, { ...opened, ...(changes as Record<string, unknown>) });
+      }),
+    );
+    await tableObj.bulkPut(resealed);
+    return stored.length;
+  }
+  return tableObj.where(index).equals(value).modify(changes);
 }
 
 async function queryBetween(
@@ -444,7 +498,7 @@ async function queryBetween(
     query = query.reverse();
   }
   if (options.sortBy) {
-    return query.sortBy(options.sortBy);
+    return openRecords(table, await query.sortBy(options.sortBy));
   }
   if (options.offset) {
     query = query.offset(options.offset);
@@ -453,7 +507,7 @@ async function queryBetween(
     query = query.limit(options.limit);
   }
 
-  return query.toArray();
+  return openRecords(table, await query.toArray());
 }
 
 async function queryStartsWith(
@@ -469,7 +523,7 @@ async function queryStartsWith(
     query = query.reverse();
   }
   if (options.sortBy) {
-    return query.sortBy(options.sortBy);
+    return openRecords(table, await query.sortBy(options.sortBy));
   }
   if (options.offset) {
     query = query.offset(options.offset);
@@ -478,7 +532,7 @@ async function queryStartsWith(
     query = query.limit(options.limit);
   }
 
-  return query.toArray();
+  return openRecords(table, await query.toArray());
 }
 
 // ============================================================================
@@ -607,7 +661,62 @@ async function tableCollection(table: string, options: QueryOptions = {}): Promi
   if (options.limit) {
     collection = collection.limit(options.limit);
   }
-  return collection.toArray();
+  return openRecords(table, await collection.toArray());
+}
+
+// ============================================================================
+// At-Rest Encryption Management
+// ============================================================================
+
+const REENCRYPT_CHUNK_SIZE = 200;
+
+/**
+ * Background sweep that upgrades existing plaintext records to sealed
+ * envelopes ('encrypt', after App Lock setup) or unwraps everything back to
+ * plaintext ('decrypt', before App Lock is disabled). Chunked by primary key
+ * so it never holds a whole table in memory.
+ */
+async function reencryptAll(direction: 'encrypt' | 'decrypt'): Promise<Record<string, number>> {
+  await ensureReady();
+  const state = getDbCryptoState();
+  if (!state.hasKey) {
+    throw new Error(`reencryptAll(${direction}) requires the encryption key to be configured`);
+  }
+
+  const changedByTable: Record<string, number> = {};
+  for (const tableName of SENSITIVE_TABLES) {
+    const tableObj = (db as unknown as Record<string, Table>)[tableName];
+    if (!tableObj) continue;
+    const primKeys = await tableObj.toCollection().primaryKeys();
+    let changed = 0;
+
+    for (let i = 0; i < primKeys.length; i += REENCRYPT_CHUNK_SIZE) {
+      const chunkKeys = primKeys.slice(i, i + REENCRYPT_CHUNK_SIZE);
+      const rows = (await tableObj.bulkGet(chunkKeys)) as Array<
+        Record<string, unknown> | undefined
+      >;
+      const updates: unknown[] = [];
+
+      for (const row of rows) {
+        if (!row || !recordIsSensitive(tableName, row)) continue;
+        if (direction === 'encrypt') {
+          if (row._enc) continue; // already sealed
+          const sealed = await sealRecord(tableName, row);
+          if (sealed !== row) updates.push(sealed);
+        } else {
+          if (!row._enc) continue; // already plaintext
+          updates.push(await openRecord(tableName, row));
+        }
+      }
+
+      if (updates.length) {
+        await tableObj.bulkPut(updates);
+        changed += updates.length;
+      }
+    }
+    changedByTable[tableName] = changed;
+  }
+  return changedByTable;
 }
 
 // ============================================================================
@@ -675,6 +784,16 @@ export async function executeOperation(op: DbOperation): Promise<unknown> {
       return clearCache();
     case 'reset':
       return resetDatabase();
+
+    // At-rest encryption (see db-crypto.ts)
+    case 'configureCrypto':
+      return configureDbCrypto(
+        (payload ?? {}) as { required?: boolean; rawKey?: ArrayBuffer | Uint8Array | null },
+      );
+    case 'reencryptAll':
+      return reencryptAll(
+        (payload as { direction?: 'encrypt' | 'decrypt' })?.direction ?? 'encrypt',
+      );
 
     default:
       throw new Error(`Unknown action: ${action}`);

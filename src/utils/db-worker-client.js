@@ -28,6 +28,12 @@ let requestId = 0;
 const pendingRequests = new Map();
 let initialized = false;
 let initPromise = null;
+// Supplies the at-rest encryption config ({ required, rawKey }) for the DB
+// engine. Registered by db-crypto-bridge on the main thread and re-applied
+// after EVERY successful init — the worker can be torn down and recreated by
+// the recovery path, which would otherwise silently drop the key and make a
+// locked-vault engine write plaintext again.
+let cryptoConfigProvider = null;
 // When true, the db worker's IndexedDB was found non-functional at init
 // (notably WebKitGTK/Linux), so every operation runs the engine on the main
 // thread instead of postMessaging the (terminated) worker.
@@ -174,12 +180,14 @@ export async function initDbClient() {
       if (shouldUseMainThreadDb()) {
         const result = await initMainThread();
         initialized = true;
+        await applyCryptoConfig();
         return result;
       }
 
       try {
         const result = await initViaWorker();
         initialized = true;
+        await applyCryptoConfig();
         return result;
       } catch (workerErr) {
         // Defensive catch-all for any OTHER environment where the worker's
@@ -195,6 +203,7 @@ export async function initDbClient() {
         terminateDbWorker();
         const result = await initMainThread();
         initialized = true;
+        await applyCryptoConfig();
         return result;
       }
     } catch (error) {
@@ -353,6 +362,53 @@ async function probeWorkerIndexedDb() {
   } finally {
     if (probeTimeoutId) clearTimeout(probeTimeoutId);
   }
+}
+
+/**
+ * Register the provider that supplies the at-rest encryption config. Applied
+ * immediately if the client is already initialized, and re-applied after
+ * every future (re)init.
+ * @param {() => Promise<{required: boolean, rawKey?: Uint8Array|null}|null>} provider
+ */
+export async function setCryptoConfigProvider(provider) {
+  cryptoConfigProvider = provider;
+  if (initialized) {
+    await applyCryptoConfig();
+  }
+}
+
+/**
+ * Push the current crypto config (from the registered provider) to the engine.
+ * Also called directly on lock/unlock transitions via db-crypto-bridge.
+ */
+export async function applyCryptoConfig() {
+  if (!cryptoConfigProvider) return;
+  try {
+    const config = await cryptoConfigProvider();
+    if (config) {
+      await send('configureCrypto', null, config);
+    }
+  } catch (error) {
+    console.error('[db-worker-client] Failed to apply crypto config:', error);
+  }
+}
+
+/**
+ * Push an explicit crypto config to the engine, bypassing the provider.
+ * Used by the disable-lock sweep, which needs the key present while the
+ * fail-closed flag is already off.
+ * @param {{required: boolean, rawKey?: Uint8Array|null}} config
+ */
+export async function sendCryptoConfig(config) {
+  return send('configureCrypto', null, config);
+}
+
+/**
+ * Run the at-rest re-encryption sweep in the engine.
+ * @param {'encrypt'|'decrypt'} direction
+ */
+export async function reencryptAllDb(direction) {
+  return send('reencryptAll', null, { direction });
 }
 
 /**

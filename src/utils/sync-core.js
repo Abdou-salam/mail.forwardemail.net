@@ -16,7 +16,8 @@
  * @returns {{ processMutations: () => Promise<void> }}
  */
 
-const DB_NAME = 'webmail-cache-v1';
+import { DB_NAME } from './db-constants.ts';
+
 const META_STORE = 'meta';
 const MUTATION_KEY_PREFIX = 'mutation_queue_';
 const FETCH_TIMEOUT_MS = 30_000;

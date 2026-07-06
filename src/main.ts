@@ -52,7 +52,9 @@ import {
   wasUnlockedThisSession,
   lock as lockCryptoStore,
   restoreSessionCredentials,
+  restoreSessionDek,
 } from './utils/crypto-store.js';
+import { initDbCryptoBridge } from './utils/db-crypto-bridge.js';
 import {
   start as startInactivityTimer,
   pause as pauseInactivityTimer,
@@ -1932,6 +1934,14 @@ async function bootstrap() {
     // resolves later the cache simply attaches then, and the read/write paths
     // already tolerate a not-yet-ready cache (they fall through to the network /
     // demo interceptor).
+    // Register the at-rest encryption config provider BEFORE the database
+    // initializes: the db client re-applies it after every (re)init, so the
+    // engine knows to fail closed while the vault is locked and receives the
+    // key as soon as the vault unlocks.
+    initDbCryptoBridge().catch((err) => {
+      console.error('[bootstrap] db crypto bridge init failed:', err);
+    });
+
     const dbResult = (await Promise.race([
       initializeDatabase(),
       new Promise((resolve) => setTimeout(() => resolve({ success: false, timedOut: true }), 4000)),
@@ -2066,9 +2076,17 @@ async function bootstrap() {
       // OpenVault() already calls restoreSessionCredentials() after
       // successful unlock, so credentials are ready now.
     } else if (isLockEnabled() && isVaultConfigured() && wasUnlockedThisSession()) {
-      // Session was previously unlocked but DEK is gone (page reload).
-      // sessionStorage should still have plaintext credentials from the
-      // prior unlock, but if they were lost ensure they're available.
+      // Session was previously unlocked but the in-memory DEK is gone (page
+      // reload). Restore it from the session stash so the encrypted cache
+      // stays readable — falling back to the lock screen if the stash is
+      // missing (without the DEK the at-rest-encrypted cache is unreadable).
+      const restored = await restoreSessionDek();
+      if (!restored) {
+        pauseInactivityTimer();
+        await showLockScreen();
+      }
+      // restoreSessionDek/openVault handle restoreSessionCredentials(); keep
+      // this as a belt-and-braces fallback for pre-encryption sessions.
       restoreSessionCredentials();
     } else if (!isLockEnabled()) {
       // No app lock — credentials are stored as plaintext in localStorage.

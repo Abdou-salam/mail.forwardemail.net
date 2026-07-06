@@ -1,5 +1,13 @@
 import { db } from './db';
 import { warn } from './logger.ts';
+import {
+  isSensitiveLocalKey,
+  isLockEnabled,
+  isVaultConfigured,
+  isUnlocked,
+  protectLocalValue,
+  revealLocalValue,
+} from './crypto-store.js';
 
 const PREFIX = 'webmail_';
 const ACCOUNTS_KEY = `${PREFIX}accounts`; // List of all logged-in accounts (localStorage - persistent)
@@ -157,16 +165,23 @@ export const Local = {
         // First read in this tab — copy from localStorage to lock in the account
         const localValue = localStorage.getItem(prefixedKey);
         if (localValue !== null) {
-          // Do NOT copy encrypted values — they are unusable without the DEK
-          // and would produce garbage auth headers (→ 401).
           if (localValue.startsWith(ENCRYPTED_PREFIX)) {
-            return null;
+            // Decrypt when the vault is unlocked; while locked the value is
+            // unusable (returning it would send garbage auth headers → 401).
+            const revealed = revealLocalValue(localValue);
+            if (revealed === null) return null;
+            sessionStorage.setItem(prefixedKey, revealed);
+            return revealed;
           }
           sessionStorage.setItem(prefixedKey, localValue);
         }
         return localValue;
       }
-      return localStorage.getItem(`${PREFIX}${key}`);
+      const value = localStorage.getItem(`${PREFIX}${key}`);
+      if (value !== null && value.startsWith(ENCRYPTED_PREFIX) && isSensitiveLocalKey(key)) {
+        return revealLocalValue(value);
+      }
+      return value;
     } catch (error) {
       console.error('localStorage.getItem failed:', error);
       return null;
@@ -175,7 +190,11 @@ export const Local = {
 
   set(key, value) {
     try {
-      localStorage.setItem(`${PREFIX}${key}`, value);
+      // Sensitive keys (credentials, PGP material, the accounts list) are
+      // encrypted at rest whenever the App Lock vault is unlocked — not just
+      // in the one-time setup sweep. Tab-scoped sessionStorage keeps the
+      // plaintext copy (same model as restoreSessionCredentials).
+      localStorage.setItem(`${PREFIX}${key}`, protectLocalValue(key, value));
       if (TAB_SCOPED_KEYS.has(key)) {
         sessionStorage.setItem(`${PREFIX}${key}`, value);
       }
@@ -316,18 +335,48 @@ export async function reconcileOrphanedAccountData() {
  * Handles multiple logged-in accounts with account-scoped storage
  * Supports both persistent (localStorage) and session-only (sessionStorage) accounts
  */
+// The vault is configured+enabled but the DEK is not in memory — encrypted
+// values are unreadable, so account-list writes must be refused to avoid
+// clobbering the (unreadable) stored list.
+const isVaultLocked = () => isLockEnabled() && isVaultConfigured() && !isUnlocked();
+
+/**
+ * Read an accounts list, transparently decrypting the localStorage copy.
+ * Returns null when the value is encrypted and the vault is locked —
+ * distinct from [] so writers can refuse to overwrite it.
+ */
+const readAccountsList = (storage, storageKey) => {
+  try {
+    const data = storage.getItem(storageKey);
+    if (!data) return [];
+    const text = data.startsWith(ENCRYPTED_PREFIX) ? revealLocalValue(data) : data;
+    if (text === null) return null;
+    const parsed = JSON.parse(text);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    console.error('Failed to read accounts list:', error);
+    return [];
+  }
+};
+
+/**
+ * Write an accounts list. The persistent (localStorage) copy is encrypted
+ * whenever the vault is unlocked; sessionStorage stays plaintext for its
+ * tab lifetime, matching the tab-scoped credential model.
+ */
+const writeAccountsList = (storage, storageKey, accounts) => {
+  const json = JSON.stringify(accounts);
+  const value = storage === localStorage ? protectLocalValue('accounts', json) : json;
+  storage.setItem(storageKey, value);
+};
+
 export const Accounts = {
   /**
    * Get persistent accounts from localStorage
    */
   getPersistent() {
-    try {
-      const data = localStorage.getItem(ACCOUNTS_KEY);
-      return data ? JSON.parse(data) : [];
-    } catch (error) {
-      console.error('Failed to get persistent accounts:', error);
-      return [];
-    }
+    const list = readAccountsList(localStorage, ACCOUNTS_KEY);
+    return list === null ? [] : list;
   },
 
   /**
@@ -416,12 +465,12 @@ export const Accounts = {
       const storageKey = staySignedIn ? ACCOUNTS_KEY : SESSION_ACCOUNTS_KEY;
 
       // Get accounts from the appropriate storage
-      let accounts = [];
-      try {
-        const data = storage.getItem(storageKey);
-        accounts = data ? JSON.parse(data) : [];
-      } catch {
-        accounts = [];
+      const accounts = readAccountsList(storage, storageKey);
+      if (accounts === null) {
+        // Encrypted list + locked vault: writing now would replace every
+        // stored account with just this one. Refuse; retry after unlock.
+        warn('Cannot modify accounts while the vault is locked');
+        return false;
       }
 
       const existingIndex = accounts.findIndex((a) => a.email === email);
@@ -440,19 +489,21 @@ export const Accounts = {
         accounts.push(accountData);
       }
 
-      storage.setItem(storageKey, JSON.stringify(accounts));
+      writeAccountsList(storage, storageKey, accounts);
 
       // If moving from session to persistent (or vice versa), remove from the other storage
       const otherStorage = staySignedIn ? sessionStorage : localStorage;
       const otherKey = staySignedIn ? SESSION_ACCOUNTS_KEY : ACCOUNTS_KEY;
       try {
-        const otherData = otherStorage.getItem(otherKey);
-        if (otherData) {
-          const otherAccounts = JSON.parse(otherData).filter((a) => a.email !== email);
-          if (otherAccounts.length > 0) {
-            otherStorage.setItem(otherKey, JSON.stringify(otherAccounts));
-          } else {
-            otherStorage.removeItem(otherKey);
+        const otherAccounts = readAccountsList(otherStorage, otherKey);
+        if (otherAccounts !== null && otherAccounts.length) {
+          const filtered = otherAccounts.filter((a) => a.email !== email);
+          if (filtered.length !== otherAccounts.length) {
+            if (filtered.length > 0) {
+              writeAccountsList(otherStorage, otherKey, filtered);
+            } else {
+              otherStorage.removeItem(otherKey);
+            }
           }
         }
       } catch {
@@ -476,13 +527,18 @@ export const Accounts = {
       // Remove from both storages
       let found = false;
 
-      // Remove from persistent storage
+      // Remove from persistent storage (refuse while the vault is locked —
+      // getPersistent would read [] and the write would clobber the list)
+      if (isVaultLocked() && localStorage.getItem(ACCOUNTS_KEY)) {
+        warn('Cannot remove persistent account while the vault is locked');
+        return false;
+      }
       const persistent = this.getPersistent();
       const filteredPersistent = persistent.filter((a) => a.email !== email);
       if (filteredPersistent.length !== persistent.length) {
         found = true;
         if (filteredPersistent.length > 0) {
-          localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(filteredPersistent));
+          writeAccountsList(localStorage, ACCOUNTS_KEY, filteredPersistent);
         } else {
           localStorage.removeItem(ACCOUNTS_KEY);
         }
@@ -562,6 +618,12 @@ export const Accounts = {
    */
   init() {
     try {
+      // While the vault is locked the accounts list is unreadable — a
+      // migration pass here would see "no accounts" and rebuild the list
+      // from (also unreadable) credentials. Skip; bootstrap re-runs flows
+      // after unlock.
+      if (isVaultLocked()) return true;
+
       // Check if we have old-style credentials but no accounts list
       const existingAccounts = this.getAll();
       const email = Local.get('email');

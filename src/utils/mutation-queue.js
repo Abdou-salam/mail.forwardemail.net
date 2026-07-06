@@ -37,6 +37,21 @@ export const mutationQueueProcessing = writable(false);
 
 let processing = false;
 
+// Serializes every read-modify-write of the queue's single meta row. The queue
+// has three concurrent writers (queueMutation appends, processMutationQueue's
+// final prune, clearCompletedMutations) — without this, an append that lands
+// between another writer's read and write is silently dropped.
+let queueWriteLock = Promise.resolve();
+
+function withQueueLock(fn) {
+  const run = queueWriteLock.then(fn, fn);
+  queueWriteLock = run.then(
+    () => {},
+    () => {},
+  );
+  return run;
+}
+
 function getAccount() {
   return Local.get('email') || 'default';
 }
@@ -96,7 +111,6 @@ async function writeQueue(account, queue) {
  */
 export async function queueMutation(type, payload) {
   const account = getAccount();
-  const queue = await readQueue(account);
 
   // Store auth info so the SW can process mutations when the tab is closed
   let authHeader = '';
@@ -116,8 +130,11 @@ export async function queueMutation(type, payload) {
     apiBase: config.apiBase || '',
     authHeader,
   };
-  queue.push(mutation);
-  await writeQueue(account, queue);
+  await withQueueLock(async () => {
+    const queue = await readQueue(account);
+    queue.push(mutation);
+    await writeQueue(account, queue);
+  });
 
   // If online, process immediately; otherwise register Background Sync
   if (isOnline()) {
@@ -224,6 +241,7 @@ export async function processMutationQueue() {
 
   processing = true;
   mutationQueueProcessing.set(true);
+  let queuedDuringRun = false;
 
   try {
     let modified = false;
@@ -257,11 +275,30 @@ export async function processMutationQueue() {
       const permanentlyFailed = queue.filter(
         (m) => m.status === 'failed' && m.retryCount >= MAX_RETRIES,
       );
-      // Remove completed and permanently-failed mutations
-      const remaining = queue.filter(
-        (m) => m.status !== 'completed' && !(m.status === 'failed' && m.retryCount >= MAX_RETRIES),
-      );
-      await writeQueue(account, remaining);
+      // Reconcile against a FRESH read under the lock: the snapshot above is
+      // stale by now (network round-trips), and writing it back verbatim would
+      // drop any mutation enqueued while we were processing. Keep every entry
+      // still in the stored queue, applying our processed statuses by id.
+      const processedById = new Map(queue.map((m) => [m.id, m]));
+      await withQueueLock(async () => {
+        const current = await readQueue(account);
+        const remaining = current
+          .map((m) => processedById.get(m.id) || m)
+          .filter(
+            (m) =>
+              m.status !== 'completed' && !(m.status === 'failed' && m.retryCount >= MAX_RETRIES),
+          );
+        // Mutations enqueued mid-run were invisible to this pass's snapshot,
+        // and their own processMutationQueue trigger hit the `processing`
+        // guard. Re-run below so they don't wait for the 30s sweep.
+        queuedDuringRun = remaining.some(
+          (m) =>
+            !processedById.has(m.id) &&
+            m.status === 'pending' &&
+            (!m.nextRetryAt || m.nextRetryAt <= Date.now()),
+        );
+        await writeQueue(account, remaining);
+      });
 
       if (permanentlyFailed.length && typeof window !== 'undefined') {
         window.dispatchEvent(
@@ -274,6 +311,10 @@ export async function processMutationQueue() {
   } finally {
     processing = false;
     mutationQueueProcessing.set(false);
+  }
+
+  if (queuedDuringRun) {
+    await processMutationQueue();
   }
 }
 
@@ -292,9 +333,11 @@ export async function getMutationQueueCount() {
  */
 export async function clearCompletedMutations() {
   const account = getAccount();
-  const queue = await readQueue(account);
-  const remaining = queue.filter((m) => m.status === 'pending' || m.status === 'processing');
-  await writeQueue(account, remaining);
+  await withQueueLock(async () => {
+    const queue = await readQueue(account);
+    const remaining = queue.filter((m) => m.status === 'pending' || m.status === 'processing');
+    await writeQueue(account, remaining);
+  });
 }
 
 /**

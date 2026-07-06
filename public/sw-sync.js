@@ -14,6 +14,11 @@
   const MESSAGES_STORE = 'messages';
   const BODIES_STORE = 'messageBodies';
   const FOLDERS_STORE = 'folders';
+  const META_STORE = 'meta';
+  // Written by src/utils/db-crypto-bridge.js. When App Lock is enabled the
+  // main app stores message data encrypted (a key this SW never has), so
+  // background content sync must not write plaintext records behind it.
+  const APP_LOCK_FLAG_KEY = 'app_lock_enabled';
   const state = new Map(); // folderKey -> { cancelled, running }
   const LOG = false;
 
@@ -383,6 +388,26 @@
     return fetchJson(url.toString(), headers);
   };
 
+  /**
+   * True when the main app has App Lock (at-rest encryption) enabled.
+   * Read from the plaintext meta flag; on any error default to false so a
+   * missing flag never disables background sync for the common case.
+   */
+  const isAppLockEnabled = async () => {
+    try {
+      const db = await openDb();
+      if (!db.objectStoreNames.contains(META_STORE)) return false;
+      return await new Promise((resolve) => {
+        const tx = db.transaction(META_STORE, 'readonly');
+        const req = tx.objectStore(META_STORE).get(APP_LOCK_FLAG_KEY);
+        req.onsuccess = () => resolve(req.result?.value === true);
+        req.onerror = () => resolve(false);
+      });
+    } catch {
+      return false;
+    }
+  };
+
   const startSync = async (opts) => {
     const {
       accountId,
@@ -393,6 +418,18 @@
       pageSize = DEFAULT_PAGE_SIZE,
       maxMessages,
     } = opts;
+
+    if (await isAppLockEnabled()) {
+      LOG && console.log('[SW sync] Skipped: App Lock at-rest encryption is enabled');
+      await postToClients({
+        type: 'syncProgress',
+        folderId,
+        status: 'skipped-app-lock',
+        pagesDone: 0,
+        messagesDone: 0,
+      });
+      return;
+    }
     const folderKey = `${accountId}:${folderId}`;
     state.set(folderKey, { cancelled: false, running: true });
     await postToClients({
@@ -532,7 +569,7 @@
   };
 
   // ── Background Sync: process offline mutation queue ──────────────────
-  const META_STORE = 'meta';
+  // (META_STORE is declared with the other store names at the top.)
   const MUTATION_QUEUE_PREFIX = 'mutation_queue_';
   const MUTATION_MAX_RETRIES = 5;
 

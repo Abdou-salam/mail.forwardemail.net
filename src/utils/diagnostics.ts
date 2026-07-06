@@ -19,6 +19,7 @@
  */
 
 import { isTauri, isTauriDesktop, isTauriMobile, getPlatform } from './platform.js';
+import { DB_NAME } from './db-constants';
 
 export type DiagnosticStatus = 'pass' | 'fail' | 'warn' | 'skip';
 
@@ -104,7 +105,7 @@ export const checkIndexedDB = (): Promise<DiagnosticResult> =>
     // Use the raw IndexedDB API so we don't trigger Dexie's open-and-migrate
     // path on a user who has never used the app.
     return await new Promise<Omit<DiagnosticResult, 'id' | 'label' | 'durationMs'>>((resolve) => {
-      const req = indexedDB.open('webmail-cache-v1');
+      const req = indexedDB.open(DB_NAME);
       req.onerror = () => resolve({ status: 'fail', message: req.error?.message ?? 'open failed' });
       req.onsuccess = () => {
         const db = req.result;

@@ -1,8 +1,10 @@
 /**
  * Crypto Store - Client-Side Encryption Layer
  *
- * Provides transparent encryption for all data stored in IndexedDB and
- * sensitive values in localStorage using libsodium (XChaCha20-Poly1305).
+ * Provides encryption for sensitive localStorage values using libsodium
+ * crypto_secretbox (XSalsa20-Poly1305), and supplies the key material for
+ * the IndexedDB at-rest layer (db-crypto.ts, AES-256-GCM) via
+ * getIdbCryptoMaterial() + db-crypto-bridge.js.
  *
  * Architecture:
  *   - Envelope encryption: a random Data Encryption Key (DEK) encrypts all data
@@ -89,6 +91,10 @@ const SENSITIVE_LOCAL_KEYS = new Set([
   'api_key',
   'alias_auth',
   'authToken',
+  // Multi-account list — carries apiKey + aliasAuth for EVERY signed-in
+  // account (storage.js Accounts), so it must be protected like the
+  // active-account credentials above.
+  'accounts',
   // PGP keys are stored as pgp_keys_{email} and pgp_passphrases_{email}
 ]);
 
@@ -100,11 +106,51 @@ const isSensitiveLocalKey = (key) => {
 };
 
 const SESSION_UNLOCKED_KEY = 'webmail_lock_session_unlocked';
+// Base64 DEK stash for the same-tab-reload case: wasUnlockedThisSession
+// deliberately skips the lock screen on SPA-style reloads, but the in-memory
+// DEK is gone — without this stash the (now really encrypted) cache would be
+// unreadable behind no lock screen. Same accepted-risk class as
+// restoreSessionCredentials(), which already places plaintext credentials in
+// sessionStorage while a session is unlocked. Cleared on lock/tab close.
+const SESSION_DEK_KEY = 'webmail_lock_session_dek';
 
 let _sodium = null;
 let _dek = null; // Data Encryption Key - held in memory only while unlocked
 let _initialized = false;
 let _enabled = false;
+
+/**
+ * Stash the DEK for same-tab reload continuity (see SESSION_DEK_KEY).
+ */
+function stashSessionDek() {
+  if (!_dek || !_sodium) return;
+  try {
+    sessionStorage.setItem(SESSION_DEK_KEY, _sodium.to_base64(_dek));
+  } catch {
+    // ignore — worst case the next reload shows the lock screen
+  }
+}
+
+function clearSessionDek() {
+  try {
+    sessionStorage.removeItem(SESSION_DEK_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Propagate the current lock state to the DB engine's at-rest encryption
+ * (and the SW gate flag). Dynamic import avoids a static cycle: the bridge
+ * imports this module. Fire-and-forget unless the caller awaits.
+ */
+function notifyDbCryptoBridge() {
+  return import('./db-crypto-bridge.js')
+    .then((bridge) => bridge.syncDbCryptoState())
+    .catch((err) => {
+      console.error('[crypto-store] Failed to sync DB crypto state:', err);
+    });
+}
 
 /**
  * Load and initialize libsodium-wrappers.
@@ -293,6 +339,7 @@ async function createVault(kek) {
   } catch {
     // ignore
   }
+  stashSessionDek();
 }
 
 /**
@@ -326,9 +373,14 @@ async function openVault(kek) {
     } catch {
       // ignore
     }
+    stashSessionDek();
     // Restore decrypted credentials to sessionStorage so Local.get()
     // returns plaintext values for auth headers.
     restoreSessionCredentials();
+    // Sweep any sensitive values that were written in plaintext while locked
+    // (e.g. a token refresh), then hand the key to the DB engine.
+    encryptExistingLocalStorage().catch(() => {});
+    notifyDbCryptoBridge();
     return true;
   } catch {
     // Wrong PIN / passkey — decryption failed
@@ -376,12 +428,15 @@ function lock() {
     }
     _dek = null;
   }
+  clearSessionDek();
   // Clear session unlock flag so the next page load shows the lock screen
   try {
     sessionStorage.removeItem(SESSION_UNLOCKED_KEY);
   } catch {
     // ignore
   }
+  // Drop the engine's key so sensitive writes fail closed while locked.
+  notifyDbCryptoBridge();
 }
 
 /**
@@ -410,6 +465,59 @@ function wasUnlockedThisSession() {
  */
 function isEnabled() {
   return _enabled && _initialized;
+}
+
+/**
+ * Restore the DEK from the same-tab session stash after a page reload.
+ * Companion to wasUnlockedThisSession(): that flag suppresses the lock
+ * screen on SPA-style reloads, so the DEK must survive them too or the
+ * encrypted cache would be unreadable behind no lock screen.
+ *
+ * @returns {Promise<boolean>} true if the DEK is available afterwards
+ */
+async function restoreSessionDek() {
+  if (_dek) return true;
+  if (!isVaultConfigured() || !wasUnlockedThisSession()) return false;
+  let stashed = null;
+  try {
+    stashed = sessionStorage.getItem(SESSION_DEK_KEY);
+  } catch {
+    return false;
+  }
+  if (!stashed) return false;
+  try {
+    const sodium = await getSodium();
+    _dek = sodium.from_base64(stashed);
+    _enabled = true;
+    _initialized = true;
+    restoreSessionCredentials();
+    notifyDbCryptoBridge();
+    return true;
+  } catch (err) {
+    console.error('[crypto-store] Failed to restore session DEK:', err);
+    return false;
+  }
+}
+
+// Domain separation for the key handed to the DB engine: the raw DEK is used
+// with libsodium secretbox (localStorage values); the engine uses WebCrypto
+// AES-GCM. Never share one key across two algorithms.
+const IDB_SUBKEY_CONTEXT = 'ForwardEmail-CryptoStore-IDB-AESGCM-v1';
+
+/**
+ * Derive the 32-byte subkey the DB engine uses for at-rest AES-GCM.
+ * Returns null while locked.
+ *
+ * @returns {Promise<Uint8Array|null>}
+ */
+async function getIdbCryptoMaterial() {
+  if (!_dek) return null;
+  const sodium = await getSodium();
+  return sodium.crypto_generichash(
+    sodium.crypto_secretbox_KEYBYTES,
+    _dek,
+    new TextEncoder().encode(IDB_SUBKEY_CONTEXT),
+  );
 }
 
 // =========================================================================
@@ -453,6 +561,12 @@ async function setupWithPin(pin) {
 
   // Encrypt existing sensitive localStorage values
   await encryptExistingLocalStorage();
+
+  // Seal the existing IndexedDB cache in the background (new writes are
+  // sealed transparently once the bridge pushes the key).
+  import('./db-crypto-bridge.js')
+    .then((bridge) => bridge.encryptAllIdbData())
+    .catch((err) => console.error('[crypto-store] IDB encryption sweep failed:', err));
 }
 
 /**
@@ -486,6 +600,9 @@ async function setupWithPasskey(prfOutput) {
     // No vault yet — create one from scratch with passkey
     await createVault(kek);
     await encryptExistingLocalStorage();
+    import('./db-crypto-bridge.js')
+      .then((bridge) => bridge.encryptAllIdbData())
+      .catch((err) => console.error('[crypto-store] IDB encryption sweep failed:', err));
   }
 }
 
@@ -535,9 +652,12 @@ async function unlockWithPasskey(prfOutput) {
         } catch {
           // ignore
         }
+        stashSessionDek();
         // Restore decrypted credentials to sessionStorage so Local.get()
         // returns plaintext values for auth headers.
         restoreSessionCredentials();
+        encryptExistingLocalStorage().catch(() => {});
+        notifyDbCryptoBridge();
         return true;
       }
     } catch {
@@ -608,6 +728,14 @@ function removePasskeyEnvelope() {
  */
 async function disableLock() {
   if (_dek) {
+    // Unwrap the IndexedDB cache FIRST — after the DEK is wiped the sealed
+    // records would be permanently unreadable.
+    try {
+      const bridge = await import('./db-crypto-bridge.js');
+      await bridge.decryptAllIdbData();
+    } catch (err) {
+      console.error('[crypto-store] IDB decryption sweep failed:', err);
+    }
     await decryptExistingLocalStorage();
   }
   localStorage.removeItem(VAULT_KEY);
@@ -615,6 +743,7 @@ async function disableLock() {
   _enabled = false;
   _initialized = false;
   setLockPrefs({ ...getLockPrefs(), enabled: false });
+  await notifyDbCryptoBridge();
 }
 
 // =========================================================================
@@ -853,6 +982,41 @@ function writeSensitiveLocal(key, value) {
 }
 
 /**
+ * Return the value that should be persisted to localStorage for `key`:
+ * encrypted when the vault is unlocked and the key is sensitive, otherwise
+ * the value unchanged. Used by storage.js Local.set so every credential
+ * write stays protected — not just the one-time setup snapshot.
+ */
+function protectLocalValue(key, value) {
+  if (typeof value !== 'string') return value;
+  if (!_enabled || !_dek || !_sodium || !isSensitiveLocalKey(key)) return value;
+  try {
+    return encryptValue(value);
+  } catch (err) {
+    // Availability over strictness for credentials: a failed encrypt must
+    // not log the user out on next launch. The next unlock sweep retries.
+    console.error(`[crypto-store] Failed to encrypt local value for ${key}:`, err);
+    return value;
+  }
+}
+
+/**
+ * Reverse of protectLocalValue for reads: decrypt an encrypted localStorage
+ * value back to its plaintext string form. Returns null when the value is
+ * encrypted but the vault is locked (callers treat it as missing).
+ */
+function revealLocalValue(value) {
+  if (typeof value !== 'string' || !isEncrypted(value)) return value;
+  if (!_dek) return null;
+  try {
+    const decrypted = decryptValue(value);
+    return typeof decrypted === 'string' ? decrypted : JSON.stringify(decrypted);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * After unlocking the vault, restore decrypted tab-scoped credentials
  * (alias_auth, api_key, authToken) into sessionStorage so that
  * Local.get() — which checks sessionStorage first — returns plaintext.
@@ -978,6 +1142,12 @@ export {
   writeSensitiveLocal,
   isSensitiveLocalKey,
   restoreSessionCredentials,
+  protectLocalValue,
+  revealLocalValue,
+
+  // Session continuity + DB engine key material
+  restoreSessionDek,
+  getIdbCryptoMaterial,
 
   // Re-encryption
   createReEncryptor,

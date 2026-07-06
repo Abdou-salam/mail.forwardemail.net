@@ -131,14 +131,18 @@ async function initFromTauriEvent() {
       // On Windows, WebView2 may isolate storage per webview, so the
       // compose window needs credentials passed explicitly from main.
       // Keys must use the 'webmail_' prefix to match the Local utility.
+      //
+      // sessionStorage ONLY: all four keys (email, alias_auth, api_key,
+      // authToken) are tab-scoped, so Local.get reads sessionStorage first —
+      // and writing localStorage here would persist plaintext credentials,
+      // clobbering the App-Lock-encrypted copies on platforms where windows
+      // share localStorage (macOS/Linux WebKit).
       if (auth) {
         const PREFIX = 'webmail_';
         for (const [key, value] of Object.entries(auth)) {
           if (value) {
             try {
-              const prefixedKey = `${PREFIX}${key}`;
-              localStorage.setItem(prefixedKey, value);
-              sessionStorage.setItem(prefixedKey, value);
+              sessionStorage.setItem(`${PREFIX}${key}`, value);
             } catch {
               // Storage may be unavailable
             }

@@ -290,6 +290,28 @@ var __swNormalize = function(exports) {
     if (key.startsWith("\\") || key.startsWith("$")) return true;
     return HIDDEN_PATTERNS.some((re) => re.test(key));
   }
+  function decodeLabelBuffer(value) {
+    if (!value || typeof value !== "object" || value.type !== "Buffer" || !Array.isArray(value.data)) {
+      return null;
+    }
+    const data = value.data;
+    try {
+      const bytes = Uint8Array.from(data, (b) => Number(b) & 255);
+      const decoder = new TextDecoder();
+      const open = bytes.indexOf(91);
+      const close = bytes.lastIndexOf(93);
+      if (open !== -1 && close > open) {
+        const parsed = JSON.parse(decoder.decode(bytes.subarray(open, close + 1)));
+        if (Array.isArray(parsed)) {
+          return parsed.map((l) => String(l ?? "").trim()).filter(Boolean);
+        }
+      }
+      const tokens = decoder.decode(bytes).match(/"([^"\\]+)"/g);
+      if (tokens) return tokens.map((t) => t.slice(1, -1).trim()).filter(Boolean);
+    } catch {
+    }
+    return [];
+  }
   function stripHtmlToPlaintext(html, maxLen = 160) {
     if (!html) return "";
     const cleaned = String(html).replace(/<style[^>]*>[\s\S]*?<\/style>/gi, " ").replace(/<script[^>]*>[\s\S]*?<\/script>/gi, " ").replace(/<br\s*\/?>/gi, " ").replace(/<\/?(p|div|li|tr|td|th|h[1-6]|blockquote|pre)[^>]*>/gi, " ").replace(/<[^>]+>/g, "").replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/&quot;/gi, '"').replace(/&#039;/gi, "'").replace(/&[#\w]+;/g, " ").replace(/\s+/g, " ").trim();
@@ -405,7 +427,8 @@ var __swNormalize = function(exports) {
       if (!normalized || /^\[\s*\]$/.test(normalized)) return "";
       return normalized;
     };
-    const extractedLabels = Array.isArray(rawLabels) ? rawLabels.map((l) => {
+    const bufferLabels = decodeLabelBuffer(rawLabels);
+    const extractedLabels = bufferLabels ? bufferLabels.map((l) => normalizeLabel(l)).filter(Boolean) : Array.isArray(rawLabels) ? rawLabels.map((l) => {
       if (typeof l === "string") return normalizeLabel(l);
       if (typeof l === "number") return normalizeLabel(String(l));
       if (l && typeof l === "object") {
@@ -415,7 +438,9 @@ var __swNormalize = function(exports) {
         );
       }
       return "";
-    }).filter(Boolean) : typeof rawLabels === "string" ? rawLabels.split(",").map((l) => normalizeLabel(l)).filter(Boolean) : rawLabels && typeof rawLabels === "object" ? Object.entries(rawLabels).filter(([, enabled]) => enabled !== false && enabled !== null && enabled !== void 0).map(([label]) => normalizeLabel(label)).filter(Boolean) : [];
+    }).filter(Boolean) : typeof rawLabels === "string" ? rawLabels.split(",").map((l) => normalizeLabel(l)).filter(Boolean) : rawLabels && typeof rawLabels === "object" ? Object.entries(rawLabels).filter(
+      ([, enabled]) => enabled !== false && enabled !== null && enabled !== void 0
+    ).map(([label]) => normalizeLabel(label)).filter(Boolean) : [];
     const labels = extractedLabels.filter((l) => !isHiddenLabel(l));
     const isUnreadRaw = Array.isArray(flags) && flags.length ? !flags.includes("\\Seen") : raw.is_unread ?? raw.isUnread ?? raw.IsUnread ?? true;
     const isUnread = typeof isUnreadRaw === "boolean" ? isUnreadRaw : Boolean(isUnreadRaw);
