@@ -896,6 +896,11 @@ async function parseRawMessage(raw, existingAttachments = []) {
       rawBody: body,
       attachments: deduped,
       textContent: email.text || extractTextContent(body),
+      // Inner MIME headers. For PGP with protected headers (RFC 3156 +
+      // draft-autocrypt "memory hole"), the REAL Subject lives here while the
+      // outer/cached subject is a placeholder like "...", and the decrypt path
+      // uses this to correct the displayed subject.
+      subject: typeof email.subject === 'string' ? email.subject : undefined,
     };
   } catch (error) {
     console.warn('[sync.worker] postal-mime parse failed', error);
@@ -1016,6 +1021,17 @@ async function fetchAndCacheBodyWithOptions(account, folder, msg, options = {}) 
           body = parsed.body;
           textContent = parsed.textContent;
           attachments = parsed.attachments;
+          // Record the badge flags and, for protected-headers senders, the
+          // real subject (the cached outer subject is a placeholder).
+          try {
+            const changes = { pgpEncrypted: true, pgpSigned: lastDecryptSigned };
+            if (typeof parsed.subject === 'string' && parsed.subject.trim()) {
+              changes.subject = parsed.subject;
+            }
+            await db.messages.where('[account+id]').equals([account, apiId]).modify(changes);
+          } catch {
+            // Best effort; the interactive decrypt path persists the same info.
+          }
         }
       } else {
         const parsed = await parseRawMessage(raw);
@@ -1101,9 +1117,11 @@ function extractPgpArmor(raw) {
 }
 
 let lastDecryptError = '';
+let lastDecryptSigned = false;
 
 async function decryptPgp(armored) {
   lastDecryptError = '';
+  lastDecryptSigned = false;
   if (!armored || !unlockedPgpKeys.length) return '';
 
   const hasInlineArmor = armored.includes('-----BEGIN PGP MESSAGE-----');
@@ -1185,10 +1203,14 @@ async function decryptPgp(armored) {
 
     const message = await openpgp.readMessage({ armoredMessage: pgpBlock });
 
-    const { data } = await openpgp.decrypt({
+    const { data, signatures } = await openpgp.decrypt({
       message,
       decryptionKeys: unlockedPgpKeys,
     });
+    // Signature PACKETS present, but sender authenticity is NOT verified (we
+    // pass no verificationKeys / have no public-key store yet). Callers must
+    // present this as "signed (unverified)".
+    lastDecryptSigned = Array.isArray(signatures) && signatures.length > 0;
     return data || '';
   } catch (err) {
     lastDecryptError = err?.message || String(err);
@@ -1252,13 +1274,18 @@ async function handleDecryptMessageTask(task) {
   try {
     parsed = await parseRawMessage(decrypted);
   } catch {
-    // If parsing fails, return raw decrypted content
+    parsed = null;
+  }
+  if (!parsed) {
+    // Parsing failed (parseRawMessage also returns null on internal errors),
+    // so return the raw decrypted content rather than dying on parsed.body.
     return {
       success: true,
       body: decrypted,
       textContent: extractTextContent(decrypted),
       attachments: [],
       rawDecrypted: true,
+      signed: lastDecryptSigned,
       keyCount: unlockedPgpKeys.length,
     };
   }
@@ -1268,6 +1295,10 @@ async function handleDecryptMessageTask(task) {
     body: parsed.body,
     textContent: parsed.textContent,
     attachments: parsed.attachments,
+    // Protected-headers subject from the decrypted inner MIME (undefined
+    // when the sender didn't encrypt the subject).
+    subject: parsed.subject,
+    signed: lastDecryptSigned,
     keyCount: unlockedPgpKeys.length,
   };
 }

@@ -2,7 +2,7 @@
  * db-engine at-rest encryption integration tests.
  *
  * Exercises the full dispatcher path (`executeOperation`) against
- * fake-indexeddb with the crypto layer configured — the same path the db
+ * fake-indexeddb with the crypto layer configured, the same path the db
  * worker, the main-thread fallback, and the sync/search workers (via
  * MessageChannel) all share. Verifies that records are sealed ON DISK (read
  * back raw through Dexie) while every read path returns plaintext, that

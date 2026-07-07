@@ -39,7 +39,7 @@ let processing = false;
 
 // Serializes every read-modify-write of the queue's single meta row. The queue
 // has three concurrent writers (queueMutation appends, processMutationQueue's
-// final prune, clearCompletedMutations) — without this, an append that lands
+// final prune, clearCompletedMutations). Without this, an append that lands
 // between another writer's read and write is silently dropped.
 let queueWriteLock = Promise.resolve();
 

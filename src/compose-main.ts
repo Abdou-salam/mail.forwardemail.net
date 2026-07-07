@@ -133,7 +133,7 @@ async function initFromTauriEvent() {
       // Keys must use the 'webmail_' prefix to match the Local utility.
       //
       // sessionStorage ONLY: all four keys (email, alias_auth, api_key,
-      // authToken) are tab-scoped, so Local.get reads sessionStorage first —
+      // authToken) are tab-scoped, so Local.get reads sessionStorage first,
       // and writing localStorage here would persist plaintext credentials,
       // clobbering the App-Lock-encrypted copies on platforms where windows
       // share localStorage (macOS/Linux WebKit).

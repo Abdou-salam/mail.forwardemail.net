@@ -1782,6 +1782,9 @@ const createMailboxStore = () => {
 
     // Invalidate in-memory folder cache so stale entries don't reappear on refresh
     invalidateFolderInMemCache(account, msg.folder);
+    // The target folder's cached view is stale too (it doesn't include the
+    // moved message yet), so drop it as well.
+    invalidateFolderInMemCache(account, target);
 
     // Update IDB cache immediately (optimistic)
     if (recordId != null) {
@@ -1846,6 +1849,13 @@ const createMailboxStore = () => {
       void loadMessages().catch(() => {});
     }
 
+    // Recount folder badges directly. The loadMessages call above is deduped
+    // when several moves run at once (drag-drop loops call moveMessage per
+    // message), so its own recount can fire before the last move lands in
+    // db.messages and the target folder (often a just-created one) keeps a
+    // stale zero. Fire-and-forget.
+    void updateFolderUnreadCounts().catch(() => {});
+
     return result;
   };
 
@@ -1887,6 +1897,10 @@ const createMailboxStore = () => {
     for (const folder of affectedFolders) {
       invalidateFolderInMemCache(account, folder);
     }
+    // The TARGET folder's cache is just as stale. Without this, a previously
+    // viewed folder shows its old contents (missing the moved messages) on
+    // next selection.
+    invalidateFolderInMemCache(account, target);
 
     // Clear selection for moved messages
     const currentSelection = get(selectedConversationIds);
@@ -1959,6 +1973,16 @@ const createMailboxStore = () => {
         await searchStore.actions.indexMessages(messageUpdates);
       } catch (err) {
         console.error('bulkMoveMessages DB update failed', err);
+      }
+
+      // Recount sidebar folder badges now that db.messages has the moved
+      // messages under the target folder. Without this the target folder
+      // (especially a just-created one) shows a stale zero until the next
+      // full folder refresh or re-login.
+      try {
+        await updateFolderUnreadCounts();
+      } catch (err) {
+        console.warn('bulkMoveMessages folder recount failed', err);
       }
     }
 

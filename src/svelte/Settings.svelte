@@ -1204,7 +1204,13 @@
 
     refreshSyncWorkerPgpKeys();
     clearPgpKeyCache();
-    await invalidatePgpCachedBodies(currentAcct);
+    try {
+      await invalidatePgpCachedBodies(currentAcct);
+    } catch (err) {
+      // Same worker-timeout hazard as saveKey. The key is already removed;
+      // stale cached bodies just linger until their next open.
+      console.warn('[Settings] invalidatePgpCachedBodies failed:', err);
+    }
     setSuccess('Encryption key removed.');
   };
 
@@ -1216,73 +1222,97 @@
     editingKeyPassphrase = '';
   };
 
+  let savingKey = $state(false);
+
+  // Every await in here can reject, not just return an error result: sync
+  // worker calls time out after 30s, and iOS WKWebView is known to hang
+  // workers. An unhandled rejection here used to leave the form open with no
+  // feedback and wedge the page's dropdowns until a refresh, so the whole
+  // flow is wrapped and always surfaces an error message instead.
   const saveKey = async () => {
-    const name = (editingKeyName || '').trim();
-    const value = (editingKeyValue || '').trim();
-    const passphrase = (editingKeyPassphrase || '').trim();
-    if (!name || !value) {
-      setError('Please provide a name and key.');
-      return;
-    }
-
-    const checkResult = await unlockPgpKey({
-      keyName: name,
-      keyValue: value,
-      checkOnly: true,
-    });
-    if (!checkResult?.success && checkResult?.needsPassphrase === false) {
-      setError(
-        /no secret key packet found/i.test(checkResult?.error || '')
-          ? 'Please provide a PGP private key, not a public key.'
-          : checkResult?.error || 'Please provide a valid PGP private key.',
-      );
-      return;
-    }
-
-    if (passphrase) {
-      const unlockResult = await unlockPgpKey({
-        keyName: name,
-        passphrase,
-        keyValue: value,
-        remember: false,
-      });
-      if (!unlockResult?.success) {
-        setError(unlockResult?.error || 'That passphrase could not unlock this private key.');
+    if (savingKey) return;
+    savingKey = true;
+    try {
+      const name = (editingKeyName || '').trim();
+      const value = (editingKeyValue || '').trim();
+      const passphrase = (editingKeyPassphrase || '').trim();
+      if (!name || !value) {
+        setError('Please provide a name and key.');
         return;
       }
-    }
 
-    const previousKey = editingIndex >= 0 ? pgpKeys[editingIndex] : null;
-    const keys = [...pgpKeys];
-    if (editingIndex >= 0) {
-      keys[editingIndex] = { name, value };
-    } else {
-      keys.push({ name, value });
-    }
-    pgpKeys = keys;
-    const currentAcct = activeEmail || getAliasEmail() || Local.get('email') || '';
-    Local.set(`pgp_keys_${currentAcct}`, JSON.stringify(pgpKeys));
+      const checkResult = await unlockPgpKey({
+        keyName: name,
+        keyValue: value,
+        checkOnly: true,
+      });
+      if (!checkResult?.success && checkResult?.needsPassphrase === false) {
+        setError(
+          /no secret key packet found/i.test(checkResult?.error || '')
+            ? 'Please provide a PGP private key, not a public key.'
+            : checkResult?.error || 'Please provide a valid PGP private key.',
+        );
+        return;
+      }
 
-    const storedPassphrases = loadStoredPgpPassphrases();
-    if (previousKey?.name && previousKey.name !== name) {
-      delete storedPassphrases[previousKey.name];
-    }
-    if (passphrase) {
-      storedPassphrases[name] = passphrase;
-    } else {
-      delete storedPassphrases[name];
-    }
-    persistStoredPgpPassphrases(storedPassphrases);
+      if (passphrase) {
+        const unlockResult = await unlockPgpKey({
+          keyName: name,
+          passphrase,
+          keyValue: value,
+          remember: false,
+        });
+        if (!unlockResult?.success) {
+          setError(unlockResult?.error || 'That passphrase could not unlock this private key.');
+          return;
+        }
+      }
 
-    refreshSyncWorkerPgpKeys();
-    clearPgpKeyCache();
-    await invalidatePgpCachedBodies(currentAcct);
-    cancelKeyForm();
-    setSuccess(
-      passphrase
-        ? 'Encryption key saved and unlocked locally.'
-        : 'Encryption key saved locally. If it is passphrase-protected, you will be prompted when opening an encrypted message.',
-    );
+      const previousKey = editingIndex >= 0 ? pgpKeys[editingIndex] : null;
+      const keys = [...pgpKeys];
+      if (editingIndex >= 0) {
+        keys[editingIndex] = { name, value };
+      } else {
+        keys.push({ name, value });
+      }
+      pgpKeys = keys;
+      const currentAcct = activeEmail || getAliasEmail() || Local.get('email') || '';
+      Local.set(`pgp_keys_${currentAcct}`, JSON.stringify(pgpKeys));
+
+      const storedPassphrases = loadStoredPgpPassphrases();
+      if (previousKey?.name && previousKey.name !== name) {
+        delete storedPassphrases[previousKey.name];
+      }
+      if (passphrase) {
+        storedPassphrases[name] = passphrase;
+      } else {
+        delete storedPassphrases[name];
+      }
+      persistStoredPgpPassphrases(storedPassphrases);
+
+      refreshSyncWorkerPgpKeys();
+      clearPgpKeyCache();
+      try {
+        await invalidatePgpCachedBodies(currentAcct);
+      } catch (err) {
+        // The key is saved at this point. A failed cache invalidation only
+        // means previously cached bodies get re-decrypted on next open.
+        console.warn('[Settings] invalidatePgpCachedBodies failed:', err);
+      }
+      cancelKeyForm();
+      setSuccess(
+        passphrase
+          ? 'Encryption key saved and unlocked locally.'
+          : 'Encryption key saved locally. If it is passphrase-protected, you will be prompted when opening an encrypted message.',
+      );
+    } catch (err) {
+      setError(
+        (err as Error)?.message ||
+          'Could not validate the key right now. Please try again in a moment.',
+      );
+    } finally {
+      savingKey = false;
+    }
   };
 
   const clearData = () => {
@@ -1973,7 +2003,9 @@
                 />
                 <div class="flex gap-2">
                   <Button variant="ghost" onclick={cancelKeyForm}>Cancel</Button>
-                  <Button onclick={saveKey}>Save key</Button>
+                  <Button onclick={saveKey} disabled={savingKey}>
+                    {savingKey ? 'Saving…' : 'Save key'}
+                  </Button>
                 </div>
                 <p class="text-xs text-muted-foreground">
                   Stored locally only. If your private key is passphrase-protected, enter that

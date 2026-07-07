@@ -4,8 +4,8 @@
  *
  * The DEK lives in main-thread memory inside crypto-store; the Dexie engine
  * runs in the db worker (or inline on the WebKitGTK fallback). This module
- * derives a dedicated IDB subkey from the DEK and pushes it — together with
- * the fail-closed `required` flag — into whichever context the engine runs in,
+ * derives a dedicated IDB subkey from the DEK and pushes it, together with
+ * the fail-closed `required` flag, into whichever context the engine runs in,
  * on every lock-state transition and after every worker (re)init.
  *
  * It also maintains the plaintext `app_lock_enabled` meta flag that
@@ -60,7 +60,7 @@ async function updateSwGateFlag() {
 
 /**
  * Register the config provider with the db client. Call once at bootstrap,
- * before (or around) database initialization — the provider is applied after
+ * before (or around) database initialization; the provider is applied after
  * every successful init automatically.
  */
 export async function initDbCryptoBridge() {
@@ -95,7 +95,7 @@ export async function encryptAllIdbData() {
 
 /**
  * Pre-disable sweep: unwrap every sealed record back to plaintext. MUST be
- * awaited by crypto-store.disableLock BEFORE the DEK is wiped — afterwards
+ * awaited by crypto-store.disableLock BEFORE the DEK is wiped, because afterwards
  * the sealed data would be unreachable.
  */
 export async function decryptAllIdbData() {

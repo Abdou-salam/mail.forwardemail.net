@@ -22,6 +22,7 @@ import {
 import { getCachedAttachmentBlob, cacheAttachmentBlob } from '../utils/attachment-cache.js';
 import { isTauriDesktop } from '../utils/platform.js';
 import type { Message, Attachment, PerfTracer, PgpKey } from '../types';
+import { messages } from './messageStore';
 import { writable } from 'svelte/store';
 import { warn } from '../utils/logger.ts';
 import {
@@ -57,6 +58,12 @@ export interface ImageStatus {
 
 export interface PgpStatus {
   locked: boolean;
+  /** Message was PGP-encrypted and successfully decrypted. */
+  encrypted?: boolean;
+  /** Signature packets present but NOT verified (no public-key store yet). */
+  signed?: boolean;
+  /** Protected-headers subject from the decrypted inner MIME. */
+  subject?: string;
 }
 
 interface PgpContext {
@@ -81,6 +88,10 @@ interface DecryptResult {
   reason?: string;
   message?: string;
   keyCount?: number;
+  /** Protected-headers subject parsed from the decrypted inner MIME. */
+  subject?: string;
+  /** Signature packets present in the decrypted message (unverified). */
+  signed?: boolean;
 }
 
 interface PassphraseModalRef {
@@ -576,6 +587,56 @@ export const clearMailServiceState = (): void => {
 };
 
 /**
+ * Persist what a successful decrypt revealed onto the message record: the
+ * pgpEncrypted/pgpSigned badge flags and, for senders that encrypt the
+ * subject via protected headers (the outer Subject is a placeholder like
+ * "..."), the REAL subject from the decrypted inner MIME. Updates both the
+ * cached db.messages record and the in-memory list so the row and any open
+ * reader reflect it immediately.
+ */
+async function persistDecryptedEnvelope(
+  message: Message,
+  account: string,
+  decrypted: { subject?: string; signed?: boolean },
+): Promise<void> {
+  const messageId = getMessageApiId(message);
+  if (!messageId) return;
+
+  const innerSubject =
+    typeof decrypted.subject === 'string' &&
+    decrypted.subject.trim() &&
+    decrypted.subject !== message.subject
+      ? decrypted.subject
+      : undefined;
+  const signed = Boolean(decrypted.signed);
+
+  // Nothing new to record. Avoids a write on every open of an already-flagged message.
+  if (innerSubject === undefined && message.pgpEncrypted && message.pgpSigned === signed) {
+    return;
+  }
+
+  const changes: Partial<Message> = { pgpEncrypted: true, pgpSigned: signed };
+  if (innerSubject !== undefined) changes.subject = innerSubject;
+
+  try {
+    await db.messages
+      .where('[account+id]')
+      .equals([account, messageId])
+      .modify(changes as Record<string, unknown>);
+  } catch (err) {
+    debugWarn('[PGP] Failed to persist decrypted envelope info', err);
+  }
+
+  try {
+    messages.update((list) =>
+      (list || []).map((m) => (getMessageApiId(m) === messageId ? { ...m, ...changes } : m)),
+    );
+  } catch {
+    // Store update is best-effort; the persisted record wins on next load.
+  }
+}
+
+/**
  * Handles cached PGP encrypted messages by attempting decryption and parsing
  */
 async function handleCachedPgpRaw(
@@ -617,7 +678,9 @@ async function handleCachedPgpRaw(
         const cacheKey = `${account}:${messageId}`;
         const nowMs = Date.now();
 
-        onPgpStatus?.({ locked: false });
+        // The raw was PGP and the cache holds a decrypted body, so this IS an
+        // encrypted message; signed/subject were persisted at decrypt time.
+        onPgpStatus?.({ locked: false, encrypted: true });
 
         if (shouldDebounceBodyRender(cacheKey, nowMs, recentCacheHits, lastDeliveredBodyKey)) {
           debugLog('[PGP] Cache hit debounced for message', messageId);
@@ -651,7 +714,13 @@ async function handleCachedPgpRaw(
   const result = await tryDecrypt(pgpArmor, { allowPrompt: allowPgpPrompt });
   if (result.success) {
     debugLog('[PGP] Successfully decrypted cached message');
-    onPgpStatus?.({ locked: false });
+    onPgpStatus?.({
+      locked: false,
+      encrypted: true,
+      signed: result.signed,
+      subject: result.subject,
+    });
+    persistDecryptedEnvelope(message, account, result).catch(() => {});
     abortIfNeeded(signal);
     const parsed = result;
     const parsedAttachments = sanitizeAttachments(parsed.attachments || []);
@@ -1152,7 +1221,13 @@ export const mailService = {
         });
         if (decryptResult.success) {
           debugLog('[PGP] Successfully decrypted');
-          onPgpStatus?.({ locked: false });
+          onPgpStatus?.({
+            locked: false,
+            encrypted: true,
+            signed: decryptResult.signed,
+            subject: decryptResult.subject,
+          });
+          persistDecryptedEnvelope(message, account, decryptResult).catch(() => {});
           abortIfNeeded(compositeSignal);
           const parsed = decryptResult;
           const parsedAttachments = sanitizeAttachments(parsed.attachments || []);
@@ -2008,6 +2083,8 @@ async function tryDecrypt(
         body: result.body,
         textContent: result.textContent,
         attachments: result.attachments,
+        subject: typeof result.subject === 'string' ? result.subject : undefined,
+        signed: Boolean(result.signed),
       };
     } else {
       const failureMessage =

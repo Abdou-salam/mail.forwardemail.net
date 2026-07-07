@@ -1,8 +1,8 @@
 /**
  * At-rest encryption for the IndexedDB cache (context-agnostic).
  *
- * Runs wherever db-engine runs — the db worker on most platforms, the main
- * thread on the WebKitGTK fallback — so it must not touch localStorage or any
+ * Runs wherever db-engine runs: the db worker on most platforms, the main
+ * thread on the WebKitGTK fallback. That means it must not touch localStorage or any
  * window-only API. Uses WebCrypto AES-256-GCM instead of libsodium: available
  * in every worker context, hardware-accelerated, and adds zero bytes to the
  * inlined worker bundles.
@@ -15,7 +15,7 @@
  * Envelope format (whole-record): fields required by queried indexes stay
  * plaintext; every other field is serialized to JSON and sealed into a single
  * `_enc: { v, iv, data }` field. Legacy plaintext records (no `_enc`) pass
- * through reads unchanged, so enabling encryption needs no migration cliff —
+ * through reads unchanged, so enabling encryption needs no migration cliff;
  * the reencryptAll sweep upgrades them in the background.
  *
  * Fail-closed: when the vault is enabled (`required`) but no key has been
@@ -46,7 +46,7 @@ interface Envelope {
 
 type DbRecord = Record<string, unknown> & { _enc?: Envelope };
 
-// Fields that MUST stay plaintext because a real query path uses them —
+// Fields that MUST stay plaintext because a real query path uses them:
 // primary-key components, queried indexes ([account+folder+date],
 // [account+folder+is_unread_index], where('from') repair sweep is
 // intentionally NOT preserved), and fields used by sortBy call sites.
@@ -256,7 +256,7 @@ export async function sealRecord(table: string, record: unknown): Promise<unknow
   if (isEnvelope(rec._enc)) {
     // Already sealed. A cursor-path modify (Dexie applies changes to the
     // stored record) can attach plaintext fields NEXT TO an existing
-    // envelope — merge them into the sealed payload instead of dropping or
+    // envelope. Merge them into the sealed payload instead of dropping or
     // double-storing them.
     if (!hasSecret) return record;
     const existing = await decryptFields(rec._enc);
@@ -271,7 +271,7 @@ export async function sealRecord(table: string, record: unknown): Promise<unknow
 /**
  * Open a stored record. Legacy plaintext records pass through; sealed records
  * decrypt and merge. When locked, sealed fields are stripped (never expose
- * ciphertext to callers) — the UI is behind the lock screen in that state.
+ * ciphertext to callers); the UI is behind the lock screen in that state.
  */
 export async function openRecord(table: string, record: unknown): Promise<unknown> {
   if (!record || typeof record !== 'object') return record;
@@ -293,7 +293,7 @@ export async function openRecord(table: string, record: unknown): Promise<unknow
     const secret = await decryptFields(_enc);
     return { ...plain, ...secret };
   } catch (err) {
-    // Wrong key (e.g. vault was reset) — surface the plaintext shell rather
+    // Wrong key (e.g. vault was reset), so surface the plaintext shell rather
     // than failing every list read.
     console.error(`[db-crypto] Failed to decrypt ${table} record:`, err);
     return plain;

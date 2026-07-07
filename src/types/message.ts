@@ -33,6 +33,10 @@ export interface Message {
   labels: string[];
   bodyIndexed: boolean;
   updatedAt: number;
+  /** PGP-encrypted message that was successfully decrypted at least once. */
+  pgpEncrypted?: boolean;
+  /** Signature packets were present on decrypt but NOT verified. */
+  pgpSigned?: boolean;
 }
 
 export interface MessageBody {
@@ -89,6 +93,12 @@ export interface ImageStatus {
 export interface PgpStatus {
   locked: boolean;
   keyId?: string;
+  /** Message was PGP-encrypted and successfully decrypted. */
+  encrypted?: boolean;
+  /** Signature packets present but NOT verified (no public-key store yet). */
+  signed?: boolean;
+  /** Protected-headers subject from the decrypted inner MIME. */
+  subject?: string;
 }
 
 export interface Conversation {

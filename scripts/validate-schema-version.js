@@ -11,8 +11,8 @@
  * (and already miss the dev-suffixed name in development builds).
  *
  * Exit codes:
- *   0 — versions match and no hardcoded DB names
- *   1 — mismatch, hardcoded DB name, or parse failure
+ *   0: versions match and no hardcoded DB names
+ *   1: mismatch, hardcoded DB name, or parse failure
  */
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
@@ -48,13 +48,13 @@ if (swVersion !== dbVersion) {
 
 // --- Hardcoded DB-name sweep over src/ -------------------------------------
 // Only db-constants.ts may spell out the database name; everything else must
-// import DB_NAME. (public/sw-sync.js can't import — it is covered by the
+// import DB_NAME. (public/sw-sync.js can't import; it is covered by the
 // SCHEMA_VERSION check above.)
 const SRC_ROOT = resolve(root, 'src');
 const ALLOWED = new Set([resolve(root, 'src/utils/db-constants.ts')]);
 const SOURCE_EXTENSIONS = new Set(['.js', '.mjs', '.cjs', '.ts', '.svelte']);
 // Version-pinned names only. The bare 'webmail-cache' prefix (db-recovery.js's
-// delete-all escape hatch) is legitimate — it must match old versions too.
+// delete-all escape hatch) is legitimate since it must match old versions too.
 const DB_NAME_LITERAL = /['"`]webmail-cache-v/;
 
 function* walk(dir) {

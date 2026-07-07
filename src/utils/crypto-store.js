@@ -91,7 +91,7 @@ const SENSITIVE_LOCAL_KEYS = new Set([
   'api_key',
   'alias_auth',
   'authToken',
-  // Multi-account list — carries apiKey + aliasAuth for EVERY signed-in
+  // Multi-account list. It carries apiKey + aliasAuth for EVERY signed-in
   // account (storage.js Accounts), so it must be protected like the
   // active-account credentials above.
   'accounts',
@@ -108,7 +108,7 @@ const isSensitiveLocalKey = (key) => {
 const SESSION_UNLOCKED_KEY = 'webmail_lock_session_unlocked';
 // Base64 DEK stash for the same-tab-reload case: wasUnlockedThisSession
 // deliberately skips the lock screen on SPA-style reloads, but the in-memory
-// DEK is gone — without this stash the (now really encrypted) cache would be
+// DEK is gone. Without this stash the (now really encrypted) cache would be
 // unreadable behind no lock screen. Same accepted-risk class as
 // restoreSessionCredentials(), which already places plaintext credentials in
 // sessionStorage while a session is unlocked. Cleared on lock/tab close.
@@ -127,7 +127,7 @@ function stashSessionDek() {
   try {
     sessionStorage.setItem(SESSION_DEK_KEY, _sodium.to_base64(_dek));
   } catch {
-    // ignore — worst case the next reload shows the lock screen
+    // ignore; worst case the next reload shows the lock screen
   }
 }
 
@@ -728,7 +728,7 @@ function removePasskeyEnvelope() {
  */
 async function disableLock() {
   if (_dek) {
-    // Unwrap the IndexedDB cache FIRST — after the DEK is wiped the sealed
+    // Unwrap the IndexedDB cache FIRST. After the DEK is wiped the sealed
     // records would be permanently unreadable.
     try {
       const bridge = await import('./db-crypto-bridge.js');
@@ -985,7 +985,7 @@ function writeSensitiveLocal(key, value) {
  * Return the value that should be persisted to localStorage for `key`:
  * encrypted when the vault is unlocked and the key is sensitive, otherwise
  * the value unchanged. Used by storage.js Local.set so every credential
- * write stays protected — not just the one-time setup snapshot.
+ * write stays protected, not just the one-time setup snapshot.
  */
 function protectLocalValue(key, value) {
   if (typeof value !== 'string') return value;

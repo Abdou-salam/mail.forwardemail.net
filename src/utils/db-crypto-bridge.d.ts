@@ -1,4 +1,4 @@
-/** Type declarations for db-crypto-bridge.js (main-thread App Lock ↔ DB engine glue). */
+/** Type declarations for db-crypto-bridge.js (main-thread glue between App Lock and the DB engine). */
 
 export function initDbCryptoBridge(): Promise<void>;
 export function syncDbCryptoState(): Promise<void>;

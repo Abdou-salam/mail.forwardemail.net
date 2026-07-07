@@ -191,7 +191,7 @@ export const Local = {
   set(key, value) {
     try {
       // Sensitive keys (credentials, PGP material, the accounts list) are
-      // encrypted at rest whenever the App Lock vault is unlocked — not just
+      // encrypted at rest whenever the App Lock vault is unlocked, not just
       // in the one-time setup sweep. Tab-scoped sessionStorage keeps the
       // plaintext copy (same model as restoreSessionCredentials).
       localStorage.setItem(`${PREFIX}${key}`, protectLocalValue(key, value));
@@ -335,14 +335,14 @@ export async function reconcileOrphanedAccountData() {
  * Handles multiple logged-in accounts with account-scoped storage
  * Supports both persistent (localStorage) and session-only (sessionStorage) accounts
  */
-// The vault is configured+enabled but the DEK is not in memory — encrypted
+// The vault is configured+enabled but the DEK is not in memory: encrypted
 // values are unreadable, so account-list writes must be refused to avoid
 // clobbering the (unreadable) stored list.
 const isVaultLocked = () => isLockEnabled() && isVaultConfigured() && !isUnlocked();
 
 /**
  * Read an accounts list, transparently decrypting the localStorage copy.
- * Returns null when the value is encrypted and the vault is locked —
+ * Returns null when the value is encrypted and the vault is locked,
  * distinct from [] so writers can refuse to overwrite it.
  */
 const readAccountsList = (storage, storageKey) => {
@@ -527,7 +527,7 @@ export const Accounts = {
       // Remove from both storages
       let found = false;
 
-      // Remove from persistent storage (refuse while the vault is locked —
+      // Remove from persistent storage (refuse while the vault is locked;
       // getPersistent would read [] and the write would clobber the list)
       if (isVaultLocked() && localStorage.getItem(ACCOUNTS_KEY)) {
         warn('Cannot remove persistent account while the vault is locked');
@@ -618,7 +618,7 @@ export const Accounts = {
    */
   init() {
     try {
-      // While the vault is locked the accounts list is unreadable — a
+      // While the vault is locked the accounts list is unreadable; a
       // migration pass here would see "no accounts" and rebuild the list
       // from (also unreadable) credentials. Skip; bootstrap re-runs flows
       // after unlock.

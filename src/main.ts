@@ -2078,7 +2078,7 @@ async function bootstrap() {
     } else if (isLockEnabled() && isVaultConfigured() && wasUnlockedThisSession()) {
       // Session was previously unlocked but the in-memory DEK is gone (page
       // reload). Restore it from the session stash so the encrypted cache
-      // stays readable — falling back to the lock screen if the stash is
+      // stays readable, falling back to the lock screen if the stash is
       // missing (without the DEK the at-rest-encrypted cache is unreadable).
       const restored = await restoreSessionDek();
       if (!restored) {

@@ -349,7 +349,7 @@ async function tableUpdate(table: string, key: unknown, changes: unknown): Promi
   // When the change set touches sealed fields, Dexie's in-place update would
   // write them as plaintext siblings of the envelope. Read-merge-reseal
   // instead. The crypto must run OUTSIDE an IDB transaction (awaiting
-  // WebCrypto lets the transaction auto-commit), so this is a plain RMW —
+  // WebCrypto lets the transaction auto-commit), so this is a plain RMW,
   // the same race window Dexie's own get-then-put callers already have.
   if (isDbCryptoActive() && changesTouchSensitiveFields(table, changes)) {
     const stored = await tableObj.get(key);
@@ -463,7 +463,7 @@ async function queryEqualsModify(
   const tableObj = (db as unknown as Record<string, Table>)[table];
   // Same sealed-field hazard as tableUpdate: cursor-path modify would write
   // plaintext siblings of the envelope. Read-merge-reseal the matches
-  // (crypto outside any IDB transaction — see tableUpdate).
+  // (crypto outside any IDB transaction, see tableUpdate).
   if (isDbCryptoActive() && changesTouchSensitiveFields(table, changes)) {
     const stored = await tableObj
       .where(index)

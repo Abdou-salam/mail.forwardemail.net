@@ -3,6 +3,7 @@
   import { Badge } from '$lib/components/ui/badge';
   import Star from '@lucide/svelte/icons/star';
   import Paperclip from '@lucide/svelte/icons/paperclip';
+  import LockKeyhole from '@lucide/svelte/icons/lock-keyhole';
   import { formatCompactDate } from '../utils/date';
   import { extractDisplayName } from '../utils/address.ts';
   import { truncatePreview } from '../utils/preview';
@@ -124,6 +125,7 @@
     threaded ? (item as ConversationItem)?.messages?.slice?.(-1)?.[0] : (item as Message),
   );
   const subject = $derived((lastMessage as Message)?.subject || '(No subject)');
+  const pgpEncrypted = $derived(Boolean((lastMessage as Message)?.pgpEncrypted));
   const snippet = $derived(truncatePreview((lastMessage as Message)?.snippet || ''));
   // Do NOT fall back to Date.now() for a missing date — that's the bug where a
   // bulk sync made every message read as if it arrived now. Show nothing when
@@ -183,6 +185,9 @@
     </div>
 
     <div class="flex items-center gap-1.5 truncate text-sm text-muted-foreground">
+      {#if pgpEncrypted}
+        <LockKeyhole class="h-3.5 w-3.5 shrink-0 opacity-70" aria-label="PGP encrypted" />
+      {/if}
       {#if hasAttachment}
         <Paperclip class="h-3.5 w-3.5 shrink-0 opacity-70" />
       {/if}

@@ -30,7 +30,7 @@ let initialized = false;
 let initPromise = null;
 // Supplies the at-rest encryption config ({ required, rawKey }) for the DB
 // engine. Registered by db-crypto-bridge on the main thread and re-applied
-// after EVERY successful init — the worker can be torn down and recreated by
+// after EVERY successful init, because the worker can be torn down and recreated by
 // the recovery path, which would otherwise silently drop the key and make a
 // locked-vault engine write plaintext again.
 let cryptoConfigProvider = null;

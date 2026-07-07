@@ -26,6 +26,8 @@
   import Download from '@lucide/svelte/icons/download';
   import Paperclip from '@lucide/svelte/icons/paperclip';
   import ShieldAlert from '@lucide/svelte/icons/shield-alert';
+  import ShieldCheck from '@lucide/svelte/icons/shield-check';
+  import LockKeyhole from '@lucide/svelte/icons/lock-keyhole';
   import ImageIcon from '@lucide/svelte/icons/image';
   import Loader2 from '@lucide/svelte/icons/loader-2';
 
@@ -153,8 +155,24 @@
           trackingPixelCount = status.trackingPixelCount || 0;
           blockedImageCount = status.blockedRemoteImageCount || 0;
         },
-        onPgpStatus: (status: { locked?: boolean }) => {
+        onPgpStatus: (status: {
+          locked?: boolean;
+          encrypted?: boolean;
+          signed?: boolean;
+          subject?: string;
+        }) => {
           pgpLocked = status.locked || false;
+          if (status.encrypted && message) {
+            // Reflect the decrypt result immediately: badge flags, and the
+            // protected-headers subject when the sender encrypted it (the
+            // outer subject is a placeholder like "...").
+            message = {
+              ...message,
+              pgpEncrypted: true,
+              ...(status.signed !== undefined ? { pgpSigned: status.signed } : {}),
+              ...(status.subject && status.subject.trim() ? { subject: status.subject } : {}),
+            };
+          }
         },
         onMeta: (meta: Record<string, unknown>) => {
           messageMeta = meta;
@@ -373,7 +391,27 @@
     {:else if message}
       <div class="p-6">
         <!-- Subject -->
-        <h1 class="text-xl font-semibold mb-4">{message.subject || '(No subject)'}</h1>
+        <div class="mb-4 flex flex-wrap items-center gap-2">
+          <h1 class="text-xl font-semibold">{message.subject || '(No subject)'}</h1>
+          {#if message.pgpEncrypted && !pgpLocked}
+            <span
+              class="inline-flex shrink-0 items-center gap-1 rounded border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 text-xs text-emerald-700 dark:text-emerald-400"
+              title="This message was PGP encrypted and decrypted with your key"
+            >
+              <LockKeyhole class="h-3 w-3" />
+              Encrypted
+            </span>
+            {#if message.pgpSigned}
+              <span
+                class="inline-flex shrink-0 items-center gap-1 rounded border border-border bg-muted px-1.5 py-0.5 text-xs text-muted-foreground"
+                title="A PGP signature is present but has not been verified"
+              >
+                <ShieldCheck class="h-3 w-3" />
+                Signed (unverified)
+              </span>
+            {/if}
+          {/if}
+        </div>
 
         <!-- Sender & Recipients -->
         <div class="flex items-start justify-between mb-4">
