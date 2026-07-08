@@ -91,6 +91,7 @@
     effectiveTheme,
     getEffectiveSettingValue,
     setSettingValue,
+    LocalSettings,
     isSettingOverrideEnabled,
     setSettingOverrideEnabled,
     localSettingsVersion,
@@ -171,6 +172,9 @@
   let attachmentReminderEnabled = $state(false);
   let defaultReplyAll = $state(false);
   let sendAndArchiveDefault = $state(false);
+  let signatureEnabled = $state(false);
+  let signatureText = $state('');
+  let undoSendDelay = $state('0');
   let archiveFolder = $state('');
   let sentFolder = $state('');
   let draftsFolder = $state('');
@@ -623,6 +627,12 @@
     sendAndArchiveDefault = Boolean(
       getEffectiveSettingValue('send_and_archive_default', { account: currentAcct }),
     );
+    const sig = LocalSettings.getSignature();
+    signatureEnabled = sig.enabled;
+    signatureText = sig.text;
+    undoSendDelay = String(
+      getEffectiveSettingValue('undo_send_delay', { account: currentAcct }) || 0,
+    );
     archiveFolder = getEffectiveSettingValue('archive_folder', { account: currentAcct }) || '';
     sentFolder = getEffectiveSettingValue('sent_folder', { account: currentAcct }) || '';
     draftsFolder = getEffectiveSettingValue('drafts_folder', { account: currentAcct }) || '';
@@ -966,6 +976,27 @@
   const clearExternalBrowserOverride = async () => {
     externalBrowserOverride = '';
     await saveExternalBrowserOverride();
+  };
+
+  const saveSignatureEnabled = () => {
+    LocalSettings.setSignature({ enabled: signatureEnabled });
+    toasts?.show?.(`Signature ${signatureEnabled ? 'enabled' : 'disabled'}`, 'success');
+  };
+
+  const saveSignatureText = () => {
+    LocalSettings.setSignature({ text: signatureText });
+    toasts?.show?.('Signature saved', 'success');
+  };
+
+  const saveUndoSendDelay = async () => {
+    try {
+      await setSettingValue('undo_send_delay', Number(undoSendDelay) || 0, {
+        account: getAccountId(),
+      });
+      toasts?.show?.('Undo send updated', 'success');
+    } catch (err) {
+      toasts?.show?.((err as Error)?.message || 'Failed to save undo send', 'error');
+    }
   };
 
   const saveComposePlainDefault = async () => {
@@ -1855,6 +1886,52 @@
             <p class="text-sm text-muted-foreground">
               When replying, the primary send button will archive the conversation after sending.
             </p>
+            <div class="space-y-2">
+              <Label for="undo-send-select">Undo send</Label>
+              <Select.Root
+                type="single"
+                bind:value={undoSendDelay}
+                onValueChange={saveUndoSendDelay}
+              >
+                <Select.Trigger id="undo-send-select" class="w-full">
+                  {undoSendDelay === '0' ? 'Off' : `${Number(undoSendDelay) / 1000} seconds`}
+                </Select.Trigger>
+                <Select.Content>
+                  <Select.Item value="0">Off</Select.Item>
+                  <Select.Item value="5000">5 seconds</Select.Item>
+                  <Select.Item value="10000">10 seconds</Select.Item>
+                  <Select.Item value="30000">30 seconds</Select.Item>
+                </Select.Content>
+              </Select.Root>
+              <p class="text-sm text-muted-foreground">
+                Hold sent messages briefly so you can undo. Longer delays give more time to cancel.
+              </p>
+            </div>
+          </Card.Content>
+        </Card.Root>
+
+        <Card.Root>
+          <Card.Header>
+            <Card.Title>Signature</Card.Title>
+            <Card.Description>
+              Added to new messages, replies, and forwards. Plain text; stored on this device.
+            </Card.Description>
+          </Card.Header>
+          <Card.Content class="space-y-4">
+            <label class="flex items-center gap-3">
+              <Checkbox bind:checked={signatureEnabled} onCheckedChange={saveSignatureEnabled} />
+              <span>Include my signature</span>
+            </label>
+            <div class="space-y-2">
+              <Label for="signature-textarea">Signature</Label>
+              <Textarea
+                id="signature-textarea"
+                bind:value={signatureText}
+                onchange={saveSignatureText}
+                placeholder={'Jane Doe\nForward Email'}
+                class="min-h-[120px] font-mono text-sm"
+              />
+            </div>
           </Card.Content>
         </Card.Root>
 

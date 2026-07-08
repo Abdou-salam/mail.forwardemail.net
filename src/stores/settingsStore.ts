@@ -410,6 +410,26 @@ export const LocalSettings = {
     Local.set(`pgp_passphrases_${currentAcct}`, JSON.stringify(passphrases));
   },
 
+  // Email signature (device-local, account-scoped). Stored as plain text;
+  // Compose renders it into HTML for rich mode and appends it verbatim in
+  // plain-text mode.
+  getSignature(): { enabled: boolean; text: string } {
+    const currentAcct = Local.get('email') || 'default';
+    const text = Local.get(`signature_${currentAcct}`) || '';
+    const enabled = Local.get(`signature_enabled_${currentAcct}`) === 'true';
+    return { enabled, text };
+  },
+
+  setSignature(next: { enabled?: boolean; text?: string }): void {
+    const currentAcct = Local.get('email') || 'default';
+    if (next.text !== undefined) {
+      Local.set(`signature_${currentAcct}`, next.text);
+    }
+    if (next.enabled !== undefined) {
+      Local.set(`signature_enabled_${currentAcct}`, next.enabled ? 'true' : 'false');
+    }
+  },
+
   // Device-specific remember passphrase
   getRememberPassphraseLocal(): boolean {
     return getRememberPassphraseLocal();

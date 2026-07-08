@@ -120,12 +120,24 @@ async function initFromTauriEvent() {
       if (initialized) return;
       initialized = true;
 
-      const { action, prefill, auth, sentFolder } = event.payload as {
+      const { action, prefill, auth, sentFolder, undoSendDelay } = event.payload as {
         action?: string;
         prefill?: Record<string, unknown>;
         auth?: Record<string, string>;
         sentFolder?: string;
+        undoSendDelay?: string;
       };
+
+      // Mirror the undo-send device setting into this webview's localStorage so
+      // getEffectiveSettingValue('undo_send_delay') reads it here too. Safe to
+      // persist (it's not a secret, unlike the tab-scoped auth keys above).
+      if (undoSendDelay !== undefined) {
+        try {
+          localStorage.setItem('webmail_undo_send_delay', undoSendDelay);
+        } catch {
+          // Storage may be unavailable
+        }
+      }
 
       // Inject auth credentials into storage for this webview.
       // On Windows, WebView2 may isolate storage per webview, so the

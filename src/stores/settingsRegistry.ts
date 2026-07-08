@@ -182,6 +182,19 @@ export const SETTINGS_REGISTRY: Record<string, SettingDefinition> = {
     localParse: (raw) => parseBoolean(raw, false),
     localSerialize: (value) => serializeBoolean(Boolean(value)),
   },
+  // Undo-send window in milliseconds. 0 = off (send immediately). When set,
+  // Compose queues to the outbox with sendAt = now + this, and the main
+  // window shows an Undo toast for the duration.
+  undo_send_delay: {
+    id: 'undo_send_delay',
+    label: 'Undo Send Delay',
+    scope: SETTING_SCOPES.DEVICE,
+    localKey: 'undo_send_delay',
+    valueType: 'number',
+    defaultValue: 0,
+    localParse: (raw) => parseNumber(raw, 0),
+    localSerialize: (value) => String(Number(value) || 0),
+  },
   archive_folder: {
     id: 'archive_folder',
     label: 'Archive Folder',

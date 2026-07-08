@@ -94,7 +94,9 @@
     attachmentReminder,
     getEffectiveSettingValue,
     profileName,
+    LocalSettings,
   } from '../stores/settingsStore';
+  import { applySignatureHtml, applySignaturePlain } from '../utils/signature';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Textarea } from '$lib/components/ui/textarea';
@@ -2368,6 +2370,8 @@
     }
   };
 
+  const getUndoSendDelay = () => Number(getEffectiveSettingValue('undo_send_delay')) || 0;
+
   const proceedWithSend = async () => {
     autosaveTimer?.stop();
     const payload = buildPayload();
@@ -2376,6 +2380,51 @@
     error = '';
     success = '';
     const isOnline = checkIsOnline();
+
+    // Undo-send: when enabled and online, hold the message in the outbox for
+    // the configured window instead of sending immediately. The main window
+    // shows the Undo toast and, when the window passes, triggers the actual
+    // send (the outbox already handles Sent copy, \Answered, and retries).
+    // Offline falls through to the normal offline-queue path below.
+    const undoWindowMs = getUndoSendDelay();
+    if (isOnline && undoWindowMs > 0) {
+      try {
+        const sendAt = Date.now() + undoWindowMs;
+        const queued = await queueEmail(payload, { sendAt });
+        const msgIdToDelete = sourceMessageId;
+        const serverDraftIdToDelete = currentDraftServerId;
+        if (currentDraftId) {
+          try {
+            await deleteDraft(currentDraftId);
+          } catch (err) {
+            console.error('[Compose] Failed to delete draft after undo-send queue:', err);
+          }
+        }
+        await deleteSourceMessage(msgIdToDelete);
+        if (serverDraftIdToDelete && serverDraftIdToDelete !== msgIdToDelete) {
+          await deleteSourceMessage(serverDraftIdToDelete);
+        }
+        setVisible(false);
+        const shouldArchive = archiveAfterSend;
+        reset();
+        onSent?.({
+          queued: true,
+          undoSend: true,
+          outboxId: queued.id,
+          undoWindowMs,
+          archive: shouldArchive,
+          subject: payload.subject || '(No subject)',
+        });
+        if (nativeWindow) closeNativeWindow();
+      } catch (err) {
+        error = 'Failed to queue message';
+        toasts?.show?.(error, 'error');
+      } finally {
+        sending = false;
+      }
+      return;
+    }
+
     if (!isOnline) {
       try {
         await queueEmail(payload);
@@ -2729,6 +2778,31 @@
     } else if (resolvedPrefill.body) {
       body = resolvedPrefill.body as string;
     }
+
+    // Signature: insert visibly at the top of the composed area (above any
+    // quote) for a fresh new message or forward. Skipped for draft reopens
+    // (body already holds prior content) and for replies (bodyLoading: the
+    // quote arrives later via updateReplyBody, which inserts the signature
+    // itself, so inserting here too would just be overwritten).
+    const skipSig = resolvedPrefill.draftId || resolvedPrefill.bodyLoading;
+    const sig = skipSig ? { enabled: false, text: '' } : LocalSettings.getSignature();
+    if (sig.enabled && sig.text) {
+      if (isPlainText) {
+        body = applySignaturePlain(sig.text, body);
+      } else {
+        const baseHtml = (resolvedPrefill.html as string) || body || '';
+        const withSig = applySignatureHtml(sig.text, baseHtml);
+        if (editorView) {
+          editorView.commands.setContent(withSig);
+          editorView.commands.focus('start');
+        } else {
+          body = withSig;
+        }
+        // Content already applied with the signature; skip the default set below.
+        resolvedPrefill = { ...resolvedPrefill, html: undefined };
+      }
+    }
+
     if (resolvedPrefill.html && editorView) {
       editorView.commands.setContent(resolvedPrefill.html as string);
     } else if (resolvedPrefill.html && !isPlainText) {
@@ -2766,12 +2840,17 @@
 
   const updateReplyBody = (newBody?: string, options?: { focusTop?: boolean }) => {
     if (!newBody) return;
+    // Prepend the signature above the quote for a fresh reply. This is the
+    // reply counterpart to the open() insertion (which handles new/forward);
+    // the reply quote only arrives here, after the body loads.
+    const sig = LocalSettings.getSignature();
+    const content = sig.enabled && sig.text ? applySignatureHtml(sig.text, newBody) : newBody;
     // Set the HTML content in the editor. emitUpdate=false so tiptap doesn't
     // fire onUpdate → markDraftDirty for programmatic prefill — otherwise an
     // untouched reply would autosave a draft 3s after opening.
     if (editorView) {
-      editorView.commands.setContent(newBody, false);
-      body = newBody;
+      editorView.commands.setContent(content, false);
+      body = content;
       // Lock in the prefilled content as the no-save baseline so the autosave
       // timer doesn't fire until the user actually changes something.
       autosaveTimer?.markBaseline?.();
@@ -2783,7 +2862,7 @@
       }
     } else {
       // If editor not ready, set body and it will be loaded when editor initializes
-      body = newBody;
+      body = content;
       autosaveTimer?.markBaseline?.();
     }
   };

@@ -60,7 +60,12 @@ import {
   pause as pauseInactivityTimer,
   resume as resumeInactivityTimer,
 } from './utils/inactivity-timer.js';
-import { startOutboxProcessor, processOutbox } from './utils/outbox-service';
+import {
+  startOutboxProcessor,
+  processOutbox,
+  getOutboxItem,
+  deleteOutboxItem,
+} from './utils/outbox-service';
 import { initMutationQueue, processMutationQueue } from './utils/mutation-queue';
 import { initNetworkStatus } from './utils/network-status';
 import { syncPendingDrafts, deleteDraft } from './utils/draft-service';
@@ -680,6 +685,110 @@ const composeMailboxView = writable(null);
 // the authoritative copy by id. Then invalidate the Sent cache, kick an
 // immediate metadata sync, and reload if it's currently on screen. Best-effort —
 // never let this interfere with the send result.
+// ── Undo Send ────────────────────────────────────────────────────────────
+// Compose queues the message to the outbox with a future sendAt and hands us
+// the outbox id. We show an Undo toast for the window, then trigger the actual
+// send (the outbox processor's 30s tick is only a backstop, so we fire a
+// precise timer). Undo deletes the outbox item and reopens the composer with
+// the message so nothing is lost. Lives in the main window because the compose
+// window closes on send.
+const undoSendTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+interface UndoSendResult {
+  undoSend?: boolean;
+  outboxId?: string;
+  undoWindowMs?: number;
+  subject?: string;
+  archive?: boolean;
+}
+
+function outboxDataToPrefill(data: Record<string, unknown>): Record<string, unknown> {
+  // buildPayload formats `from` as `"Name" <email>`; hand back just the bare
+  // address so a re-send doesn't double-wrap it.
+  const rawFrom = typeof data.from === 'string' ? data.from : '';
+  const fromEmail = /<([^>]+)>/.exec(rawFrom)?.[1] || rawFrom;
+  const html = typeof data.html === 'string' ? data.html : '';
+  const text = typeof data.text === 'string' ? data.text : '';
+  return {
+    to: data.to,
+    cc: data.cc,
+    bcc: data.bcc,
+    subject: data.subject,
+    html: html || undefined,
+    text: text || undefined,
+    body: !html && text ? text : undefined,
+    from: fromEmail || undefined,
+    inReplyTo: data.inReplyTo,
+    references: data.references,
+    replyToMessageId: data._replyToMessageId,
+    replyToMessageFolder: data._replyToMessageFolder,
+    attachments: data.attachments,
+  };
+}
+
+async function reopenComposeFromOutbox(item: { emailData?: Record<string, unknown> }) {
+  const data = item?.emailData;
+  if (!data) return;
+  const prefill = outboxDataToPrefill(data);
+  try {
+    if (isTauriDesktop) {
+      openComposeWindow({ action: 'open', prefill });
+    } else {
+      (composeApi.open as (p?: Record<string, unknown>) => void)(prefill);
+    }
+  } catch (err) {
+    console.warn('[main] Failed to reopen composer after undo', err);
+  }
+}
+
+function handleUndoSend(result: UndoSendResult) {
+  const outboxId = result?.outboxId;
+  if (!outboxId) return;
+  const windowMs = Number(result?.undoWindowMs) || 5000;
+  const subject = (result?.subject || '(No subject)').slice(0, 40);
+  // Archive the replied-to message only once we commit to sending, so an undo
+  // leaves the conversation untouched.
+  const toArchive = result?.archive ? get(selectedMessage) : null;
+
+  let toastId: number | null = null;
+
+  const commitSend = () => {
+    undoSendTimers.delete(outboxId);
+    if (toastId != null) toasts?.dismiss?.(toastId);
+    processOutbox();
+    if (toArchive) {
+      mailboxActions.archiveMessage(toArchive).catch(() => {});
+    }
+  };
+
+  const undo = async () => {
+    const timer = undoSendTimers.get(outboxId);
+    if (timer) {
+      clearTimeout(timer);
+      undoSendTimers.delete(outboxId);
+    }
+    if (toastId != null) toasts?.dismiss?.(toastId);
+    try {
+      const item = await getOutboxItem(outboxId);
+      if (!item || item.status === 'sending' || item.status === 'sent') {
+        toasts?.show?.('Message already sent', 'info');
+        return;
+      }
+      await deleteOutboxItem(outboxId);
+      await reopenComposeFromOutbox(item);
+    } catch (err) {
+      console.warn('[main] Undo send failed', err);
+    }
+  };
+
+  undoSendTimers.set(outboxId, setTimeout(commitSend, windowMs));
+  toastId =
+    toasts?.show?.(`Sending "${subject}"…`, 'info', {
+      duration: windowMs,
+      action: { label: 'Undo', callback: () => void undo() },
+    }) ?? null;
+}
+
 async function refreshSentFolderAfterSend(sentRaw?: unknown) {
   try {
     const acct = Local.get('email') || 'default';
@@ -712,7 +821,18 @@ if (composeRoot) {
       props: {
         toasts,
         mailboxView: composeMailboxView,
-        onSent(result?: { archive?: boolean; queued?: boolean; sentCopy?: unknown }) {
+        onSent(rawResult?: unknown) {
+          const result = (rawResult || {}) as {
+            archive?: boolean;
+            queued?: boolean;
+            sentCopy?: unknown;
+          } & UndoSendResult;
+          // Undo-send owns its own archive + eventual Sent refresh (deferred
+          // until the window passes), so handle it before the normal paths.
+          if (result?.undoSend) {
+            handleUndoSend(result);
+            return;
+          }
           if (result?.archive) {
             const message = get(selectedMessage);
             if (message) {
@@ -1066,8 +1186,19 @@ if (isTauriDesktop) {
             sentCopyPayload?: Record<string, unknown>;
             sentCopy?: unknown;
             toast?: { message: string; type?: string };
+            undoSend?: boolean;
+            outboxId?: string;
+            undoWindowMs?: number;
+            subject?: string;
           }
         | undefined;
+
+      // Undo-send from a compose window: the message is already in the outbox;
+      // run the Undo toast + timer here. The compose window has already closed.
+      if (result?.undoSend) {
+        handleUndoSend(result);
+        return;
+      }
 
       // Show the send/queued/scheduled toast HERE, in the main window. The
       // native compose window suppresses it on purpose: that window closes

@@ -27,6 +27,7 @@ const pendingInits = new Map<
     prefill: Record<string, unknown>;
     auth: Record<string, string>;
     sentFolder: string;
+    undoSendDelay: string;
   }
 >();
 
@@ -92,6 +93,10 @@ export async function openComposeWindow(options?: ComposeWindowOptions): Promise
       prefill: options?.prefill || {},
       auth: collectAuth(),
       sentFolder: resolveSentFolder(Local.get('email') || 'default', get(foldersStore)),
+      // WebView2 isolates localStorage per webview, so the compose window can't
+      // read this device setting itself. Pass it through so undo-send behaves
+      // the same in a separate window as it does inline.
+      undoSendDelay: Local.get('undo_send_delay') || '0',
     });
 
     // Defer WebviewWindow creation off the current AppKit event tick.
