@@ -286,7 +286,9 @@ const indexMessages = async (messages: Message[] = []): Promise<void> => {
   searchService!.upsertEntries(
     messages.map((msg) => mapMessageToDoc(msg, bodyMap?.get(msg.id) || '')),
   );
-  await searchService!.persist();
+  // Debounced write (see SearchService.schedulePersist) so main-thread
+  // fallback indexing during sync isn't O(n^2) in bytes written either.
+  searchService!.schedulePersist();
   refreshStats();
 };
 
@@ -305,7 +307,7 @@ const removeFromIndex = async (ids: string[] = []): Promise<void> => {
   // Fallback: ensure main-thread service exists
   await ensureMainThreadService();
   searchService!.removeEntriesByIds(ids);
-  await searchService!.persist();
+  searchService!.schedulePersist();
   refreshStats();
 };
 

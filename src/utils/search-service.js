@@ -63,6 +63,14 @@ export class SearchService {
     this.entries = [];
     this.sizeBytes = 0;
     this.folderIndexes = new Map();
+    // Coalesced persistence. persist() writes the whole entries array, so
+    // calling it once per sync batch made initial indexing O(n^2) in bytes
+    // written (each of N batches rewrites the growing blob). Mutations now
+    // schedulePersist() instead, which debounces the write so a sync burst
+    // produces a few writes at the final size rather than one per batch.
+    this._persistTimer = null;
+    this._persistPending = false;
+    this._persistInFlight = null;
   }
 
   async loadFromCache() {
@@ -161,6 +169,14 @@ export class SearchService {
   }
 
   async persist() {
+    // Any direct persist() satisfies a pending scheduled write: it captures
+    // the full current in-memory state, so a queued flush would be redundant.
+    this._persistPending = false;
+    if (this._persistTimer) {
+      clearTimeout(this._persistTimer);
+      this._persistTimer = null;
+    }
+
     if (!dbClient) {
       warn('[SearchService] No db client available for persist');
       return;
@@ -197,6 +213,49 @@ export class SearchService {
       },
       updatedAt: Date.now(),
     });
+  }
+
+  // Debounce window for coalesced writes. Long enough to swallow a burst of
+  // 100-message sync batches (which arrive ~100ms apart), short enough that a
+  // single interactive change (star, label, delete) lands quickly.
+  static PERSIST_DEBOUNCE_MS = 800;
+
+  /**
+   * Request a persist without writing immediately. Repeated calls during a
+   * burst collapse into a single trailing write. Never rejects; write errors
+   * are logged inside persist(). Safe to call fire-and-forget.
+   */
+  schedulePersist() {
+    this._persistPending = true;
+    if (this._persistTimer) return;
+    this._persistTimer = setTimeout(() => {
+      this._persistTimer = null;
+      // Ignore the returned promise; callers that need durability use flush().
+      void this.flush();
+    }, SearchService.PERSIST_DEBOUNCE_MS);
+  }
+
+  /**
+   * Force any pending scheduled write to happen now and resolve when the
+   * on-disk index reflects the current in-memory state. Serializes against an
+   * in-flight write so two flushes can't interleave partial blobs.
+   */
+  async flush() {
+    if (this._persistTimer) {
+      clearTimeout(this._persistTimer);
+      this._persistTimer = null;
+    }
+    if (!this._persistPending && !this._persistInFlight) return;
+    // Coalesce concurrent flushes onto one chain; mark pending consumed.
+    if (this._persistInFlight) {
+      await this._persistInFlight.catch(() => {});
+    }
+    if (!this._persistPending) return;
+    this._persistPending = false;
+    this._persistInFlight = this.persist().finally(() => {
+      this._persistInFlight = null;
+    });
+    return this._persistInFlight;
   }
 
   async addAndPersist(entries = []) {

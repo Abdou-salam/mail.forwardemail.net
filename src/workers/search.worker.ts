@@ -168,7 +168,10 @@ async function indexMessages(
   }
 
   service.upsertEntries(messages.map((msg) => mapMessageToDoc(msg, bodyMap?.get(msg.id) || '')));
-  await service.persist();
+  // Debounced: a sync burst of many batches collapses into a few writes.
+  // processIndexQueue flushes when the queue drains; stats come from the
+  // in-memory index, so the returned count is correct without awaiting a write.
+  service.schedulePersist();
   return { count: service.getStats().count, stats: service.getStats() };
 }
 
@@ -179,7 +182,7 @@ async function removeFromIndex(
   if (!ids.length) return { count: 0 };
   const service = await ensureService(account);
   service.removeEntriesByIds(ids);
-  await service.persist();
+  service.schedulePersist();
   return { count: service.getStats().count, stats: service.getStats() };
 }
 
@@ -373,6 +376,13 @@ async function processIndexQueue(account: string): Promise<void> {
 
   if (queue.messages.length > 0) {
     queue.timer = setTimeout(() => processIndexQueue(account), INDEX_BATCH_DELAY);
+  } else {
+    // Queue drained: force the coalesced write so the burst ends with the
+    // index durably persisted rather than waiting on the debounce timer
+    // (which a worker teardown could skip). Fire-and-forget; the in-memory
+    // index is already up to date for queries.
+    const service = services.get(account)?.service;
+    void service?.flush?.();
   }
 }
 

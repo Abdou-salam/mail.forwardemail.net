@@ -6513,7 +6513,7 @@
                     <ul class="divide-y divide-border">
                       {#each convList as conv (conv.id)}
                         <li
-                          class={`relative cursor-pointer hover:bg-accent/50 transition-colors ${activeConvId === conv.id || ($selectedConversationIds || []).includes(conv.id) ? 'msg-active' : ''}`}
+                          class={`fe-msg-row relative cursor-pointer hover:bg-accent/50 transition-colors ${activeConvId === conv.id || ($selectedConversationIds || []).includes(conv.id) ? 'msg-active' : ''}`}
                           oncontextmenu={(e) => openContextMenu(e, conv)}
                           ondblclick={(e) => {
                             const message = conv?.messages?.[conv.messages.length - 1];
@@ -6966,7 +6966,7 @@
                          place when the list prepends or reorders. -->
                     {#each msgList as msg (msg.id)}
                       <article
-                        class={`relative cursor-pointer hover:bg-accent/50 transition-colors ${activeMsgId === msg.id || ($selectedConversationIds || []).includes(msg.id) ? 'msg-active' : ''}`}
+                        class={`fe-msg-row relative cursor-pointer hover:bg-accent/50 transition-colors ${activeMsgId === msg.id || ($selectedConversationIds || []).includes(msg.id) ? 'msg-active' : ''}`}
                         oncontextmenu={(e) => openContextMenu(e, msg)}
                         ondblclick={(e) => {
                           if (isDraftMessage(msg)) {
@@ -9015,6 +9015,26 @@
 {/if}
 
 <style>
+  /*
+   * Off-screen message rows skip rendering and layout via content-visibility.
+   * The list can hold up to ~1000 rows (MAX_LIVE_MESSAGES); this keeps the
+   * browser from laying out and painting the ones you can't see, without
+   * removing them from the DOM. That means selection, swipe, keyboard nav,
+   * the infinite-scroll sentinel, find-in-page, and the e2e row selectors all
+   * keep working exactly as before (unlike true windowing, which detaches
+   * off-screen rows). contain-intrinsic-size gives an unrendered row an
+   * estimated height so the scrollbar stays stable; the `auto` keyword makes
+   * the browser remember each row's real height after it renders once, so the
+   * estimate only matters for rows that have never been on screen.
+   *
+   * Degrades cleanly: engines without content-visibility (older WebKit) ignore
+   * these properties and render the full list as they do today.
+   */
+  .fe-msg-row {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 48px;
+  }
+
   /* Shared list layout tokens */
   :global(:root) {
     --fe-row-padding: 10px 5px;
