@@ -151,9 +151,15 @@
   [data-slot='checkbox'] {
     border-width: 2px !important;
     border-color: #525252 !important;
+    /* Unchecked fill: bg-background resolves to pure white in light mode, so
+     * the box was white-on-white against a white row on Android. A light-gray
+     * fill makes the box itself visible even where the thin border reads faint
+     * at phone density. The checked selector below overrides this. */
+    background-color: #f0f0f0 !important;
   }
   .dark [data-slot='checkbox'] {
     border-color: rgba(255, 255, 255, 0.55) !important;
+    background-color: rgba(255, 255, 255, 0.1) !important;
   }
   [data-slot='checkbox'][data-state='checked'] {
     background-color: #171717 !important;
