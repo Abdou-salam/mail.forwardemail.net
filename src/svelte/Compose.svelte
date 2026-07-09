@@ -97,6 +97,7 @@
     LocalSettings,
   } from '../stores/settingsStore';
   import { applySignatureHtml, applySignaturePlain } from '../utils/signature';
+  import { markMessageAnsweredInStore } from '../stores/messageStore';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Textarea } from '$lib/components/ui/textarea';
@@ -2254,6 +2255,10 @@
 
   const markOriginalAsAnswered = async () => {
     if (!replyToMessageId) return;
+    // Reflect it in the visible list right away so the reply indicator shows
+    // without waiting for a folder reload (the IDB + server updates below only
+    // persist it; the row renders from the in-memory list).
+    markMessageAnsweredInStore(replyToMessageId);
     const account = Local.get('email') || 'default';
     try {
       // Read current message from IDB to get existing flags

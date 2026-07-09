@@ -98,6 +98,7 @@ import {
   filteredMessages,
   loading,
   messageLoading,
+  markMessageAnsweredInStore,
 } from './stores/messageStore';
 import {
   threadingEnabled,
@@ -1276,6 +1277,8 @@ if (isTauriDesktop) {
         // Set \Answered flag on the original message if this was a reply
         const origId = result.sentCopyPayload.replyToMessageId as string;
         if (origId) {
+          // Show the reply indicator immediately in the visible list.
+          markMessageAnsweredInStore(origId);
           try {
             const { Remote } = await import('./utils/remote');
             const { db } = await import('./utils/db');

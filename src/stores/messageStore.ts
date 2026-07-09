@@ -20,6 +20,31 @@ import type { Message, Attachment } from '../types';
 // macOS 26+ where synchronous DOM node removal races with the webview
 // compositor's dispatchSetObscuredContentInsets.  See deferred-store.ts.
 export const messages = deferredWritable<Message[]>([]);
+
+/**
+ * Optimistically flag a message as replied-to in the in-memory list so the
+ * reply indicator appears immediately. The reply paths already persist
+ * `\Answered` to IndexedDB and the server, but the row renders from this
+ * in-memory list, which otherwise doesn't reflect the flag until the folder
+ * is reloaded. That reload gap is why the indicator only showed "sometimes".
+ */
+export function markMessageAnsweredInStore(messageId: string | null | undefined): void {
+  if (!messageId) return;
+  const target = String(messageId);
+  messages.update((list) =>
+    (list || []).map((m) => {
+      if (String(m?.id) !== target) return m;
+      const flags = Array.isArray(m.flags) ? m.flags : [];
+      if (flags.includes('\\Answered') && m.is_answered) return m;
+      return {
+        ...m,
+        flags: flags.includes('\\Answered') ? flags : [...flags, '\\Answered'],
+        is_answered: true,
+      };
+    }),
+  );
+}
+
 export const selectedMessage: Writable<Message | null> = writable(null);
 export const searchResults: Writable<Message[]> = writable([]);
 export const searchActive: Writable<boolean> = writable(false);

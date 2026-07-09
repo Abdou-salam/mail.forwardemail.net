@@ -21,6 +21,7 @@ export interface Message {
   is_unread_index: number;
   is_starred: boolean;
   is_flagged: boolean;
+  is_answered?: boolean;
   has_attachment: boolean;
   modseq?: string | null;
   message_id: string;

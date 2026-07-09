@@ -7,6 +7,7 @@ import { warn } from './logger.ts';
 import { isDemoMode, showDemoBlockedToast } from './demo-mode';
 import { isOnline } from './network-status';
 import { exponentialBackoff } from './backoff.js';
+import { markMessageAnsweredInStore } from '../stores/messageStore';
 
 /**
  * Outbox Service
@@ -247,6 +248,8 @@ async function sendOutboxItem(item) {
     // Mark original message as \Answered if this was a reply
     const origMsgId = item.emailData?._replyToMessageId;
     if (origMsgId) {
+      // Reflect it in the visible list immediately (the sends below persist it).
+      markMessageAnsweredInStore(origMsgId);
       try {
         const records = await db.messages
           .where('[account+id]')
