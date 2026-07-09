@@ -290,29 +290,73 @@ function sanitizeUrl(url) {
   }
 }
 
-// ── Notification Queue (dedup within 2 seconds) ─────────────────────────────
+// ── Notification dedup (persisted across app restarts) ──────────────────────
+//
+// Each tag identifies one specific event: a message UID, a mailbox path, a
+// calendar item, a release version. Any given tag should fire at most once.
+// The map is persisted to localStorage and reloaded on startup so that an
+// Android app reopen (which reconnects the WebSocket and replays the same
+// NEW_MESSAGE / push events) doesn't re-notify things the user already saw.
+// A long TTL means "notified once, don't notify again" rather than a short
+// same-session window; the old behavior lost all tracking on app close.
 
 const recentNotifications = new Map();
-const DEDUP_WINDOW_MS = 2_000;
-const MAX_DEDUP_ENTRIES = 200;
+const DEDUP_TTL_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
+const MAX_DEDUP_ENTRIES = 500;
+const DEDUP_STORAGE_KEY = 'fe_notified_tags';
+
+function loadRecentNotifications() {
+  try {
+    const raw = localStorage.getItem(DEDUP_STORAGE_KEY);
+    if (!raw) return;
+    const entries = JSON.parse(raw);
+    if (!entries || typeof entries !== 'object') return;
+    const now = Date.now();
+    for (const [tag, ts] of Object.entries(entries)) {
+      if (typeof ts === 'number' && now - ts < DEDUP_TTL_MS) {
+        recentNotifications.set(tag, ts);
+      }
+    }
+  } catch {
+    // ignore malformed / unavailable storage
+  }
+}
+
+function persistRecentNotifications() {
+  try {
+    localStorage.setItem(
+      DEDUP_STORAGE_KEY,
+      JSON.stringify(Object.fromEntries(recentNotifications)),
+    );
+  } catch {
+    // ignore quota / unavailable storage
+  }
+}
+
+loadRecentNotifications();
 
 function isDuplicate(tag) {
   if (!tag) return false;
   const now = Date.now();
-  if (recentNotifications.has(tag)) {
-    const last = recentNotifications.get(tag);
-    if (now - last < DEDUP_WINDOW_MS) return true;
-  }
+  const last = recentNotifications.get(tag);
+  if (last !== undefined && now - last < DEDUP_TTL_MS) return true;
 
   recentNotifications.set(tag, now);
 
-  // Prune old entries to prevent unbounded growth
+  // Prune expired entries, then bound the size (Map preserves insertion order,
+  // so deleting the first key drops the oldest).
   if (recentNotifications.size > MAX_DEDUP_ENTRIES) {
     for (const [key, ts] of recentNotifications) {
-      if (now - ts > DEDUP_WINDOW_MS * 5) recentNotifications.delete(key);
+      if (now - ts > DEDUP_TTL_MS) recentNotifications.delete(key);
+    }
+    while (recentNotifications.size > MAX_DEDUP_ENTRIES) {
+      const oldest = recentNotifications.keys().next().value;
+      if (oldest === undefined) break;
+      recentNotifications.delete(oldest);
     }
   }
 
+  persistRecentNotifications();
   return false;
 }
 
