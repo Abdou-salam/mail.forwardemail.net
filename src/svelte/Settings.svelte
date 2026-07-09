@@ -440,8 +440,22 @@
   async function handleCheckForUpdates() {
     checkingForUpdates = true;
     updateCheckResult = '';
-    const installedVersion =
+    // Prefer the NATIVE app version on Tauri: it's read from the built binary
+    // (Cargo.toml), so it always matches what the store shows. The build-time
+    // JS constant (VITE_PKG_VERSION) can lag the native version if the frontend
+    // bundle and the native shell were built out of sync, which showed a stale
+    // version in the help page on mobile. Fall back to the JS constant on web.
+    let installedVersion =
       import.meta.env.VITE_PKG_VERSION || import.meta.env.VITE_APP_VERSION || '';
+    if (isTauri) {
+      try {
+        const { getAppVersion } = await import('../utils/tauri-bridge');
+        const native = await getAppVersion();
+        if (native) installedVersion = native;
+      } catch {
+        // keep the build-time fallback
+      }
+    }
 
     try {
       // Use the globally exposed checkNow from web-updater (web)

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getBuildInfo } from '../utils/tauri-bridge';
+  import { getBuildInfo, getAppVersion } from '../utils/tauri-bridge';
   import { checkForUpdates, downloadAndInstall } from '../utils/updater-bridge';
   import { isTauri, isTauriDesktop } from '../utils/platform.js';
   import { openExternalUrl } from '../utils/external-links.js';
@@ -87,7 +87,16 @@
           license = info.license || 'BUSL-1.1';
         }
       } catch {
-        version = version || fallbackVersion;
+        // getBuildInfo failed; try the simpler native version command before
+        // falling back to the build-time JS constant, which can be stale on
+        // mobile if the frontend bundle lagged the native version.
+        try {
+          const native = await getAppVersion();
+          if (sequence !== loadSequence) return;
+          if (native) version = native;
+        } catch {
+          version = version || fallbackVersion;
+        }
       }
 
       try {
