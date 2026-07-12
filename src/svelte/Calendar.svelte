@@ -2958,28 +2958,29 @@
     }
 
     savingEvent = true;
-    const resolvedCalendarId = getCalendarId(calendar);
+    const resolvedCalendarId = getCalendarId(calendar) as string;
 
+    const dateResult = computeEventDateValues(newEvent);
+    if (!dateResult.ok) {
+      setError(dateResult.error);
+      savingEvent = false;
+      return;
+    }
+    const {
+      range,
+      startISO,
+      endISO,
+      startValue: icalStartValue,
+      endValue: icalEndValue,
+      allDayStartDate,
+      allDayEndDate,
+    } = dateResult.values;
+
+    const { description, location, url, timezone, attendees, notify, allDay } = newEvent;
+
+    let icalData: string;
     try {
-      const dateResult = computeEventDateValues(newEvent);
-      if (!dateResult.ok) {
-        setError(dateResult.error);
-        savingEvent = false;
-        return;
-      }
-      const {
-        range,
-        startISO,
-        endISO,
-        startValue: icalStartValue,
-        endValue: icalEndValue,
-        allDayStartDate,
-        allDayEndDate,
-      } = dateResult.values;
-
-      const { description, location, url, timezone, attendees, notify, allDay } = newEvent;
-
-      const icalData = isTodo
+      icalData = isTodo
         ? generateICalTodo({
             summary: title,
             description: description || '',
@@ -3008,100 +3009,125 @@
             startValue: icalStartValue,
             endValue: icalEndValue,
           });
+    } catch (err) {
+      setError(
+        (err as Error)?.message || (isTodo ? 'Unable to create task.' : 'Unable to create event.'),
+      );
+      savingEvent = false;
+      return;
+    }
 
-      const payload = { calendar_id: resolvedCalendarId, ical: icalData };
-      const created = (await Remote.request('CalendarEventCreate', payload, {
+    // Insert a provisional copy locally and close the modal right away. The
+    // POST below swaps in the server id once it confirms. On failure the
+    // copy is removed and the modal reopens with the draft intact.
+    const tempId =
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? `temp-${crypto.randomUUID()}`
+        : `temp-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+    const optimisticEvent = {
+      id: tempId,
+      title,
+      start: startISO,
+      end: endISO,
+      calendarId: resolvedCalendarId,
+      description,
+      location,
+      url,
+      timezone,
+      attendees,
+      notify: Number(notify) || 0,
+      componentType: newEvent.componentType,
+      ...(isTodo ? { status: 'NEEDS-ACTION', percentComplete: 0, completedAt: '' } : {}),
+      ...(newEvent.allDay
+        ? { allDay: true, allDayStart: allDayStartDate, allDayEnd: allDayEndDate }
+        : {}),
+      raw: null,
+    };
+    const draft = { ...newEvent };
+    const token = ++pendingMutationToken;
+    pendingEventMutations.set(tempId, { token, patch: optimisticEvent, insert: true });
+    allEvents = [...allEvents, optimisticEvent];
+    applySelectedEvents();
+    newEventModal = false;
+    modalDirty = false;
+    setError('');
+    setSuccess(isTodo ? 'Task created successfully' : 'Event created successfully');
+    persistEventsCache(resolvedCalendarId);
+    savingEvent = false;
+
+    const payload = { calendar_id: resolvedCalendarId, ical: icalData };
+    let created: Record<string, unknown>;
+    try {
+      created = (await Remote.request('CalendarEventCreate', payload, {
         method: 'POST',
       })) as Record<string, unknown>;
-      const createdEvent = {
-        id: created?.id || created?.uid || created?.event_id || `${Date.now()}`,
+    } catch (err) {
+      if (pendingEventMutations.get(tempId)?.token === token) {
+        pendingEventMutations.delete(tempId);
+        allEvents = allEvents.filter((ev) => (ev as Record<string, unknown>).id !== tempId);
+        applySelectedEvents();
+        persistEventsCache(resolvedCalendarId);
+      }
+      // Bring the draft back so nothing the user typed is lost.
+      newEvent = draft;
+      modalDirty = true;
+      newEventModal = true;
+      setError(
+        (err as Error)?.message || (isTodo ? 'Unable to create task.' : 'Unable to create event.'),
+      );
+      return;
+    }
+
+    // Swap the provisional id for the server one.
+    const realId = (created?.id || created?.uid || created?.event_id || tempId) as string;
+    if (pendingEventMutations.get(tempId)?.token === token) {
+      pendingEventMutations.delete(tempId);
+    }
+    allEvents = allEvents.map((ev) =>
+      (ev as Record<string, unknown>).id === tempId
+        ? {
+            ...(ev as Record<string, unknown>),
+            id: realId,
+            raw: created ? JSON.parse(JSON.stringify(created)) : null,
+          }
+        : ev,
+    );
+    applySelectedEvents();
+    if (editEvent.id === tempId) {
+      editEvent = { ...editEvent, id: realId };
+    }
+    persistEventsCache(resolvedCalendarId);
+
+    // Queue invites in background (events only — tasks have no attendees and may have no range)
+    if (range && attendees && attendees.trim()) {
+      queueEventInvites({
         title,
-        start: startISO,
-        end: endISO,
-        calendarId: resolvedCalendarId,
+        start: range.start,
+        end: range.end,
+        allDay,
         description,
         location,
         url,
         timezone,
         attendees,
-        notify: Number(notify) || 0,
-        componentType: newEvent.componentType,
-        ...(isTodo ? { status: 'NEEDS-ACTION', percentComplete: 0, completedAt: '' } : {}),
-        ...(newEvent.allDay
-          ? { allDay: true, allDayStart: allDayStartDate, allDayEnd: allDayEndDate }
-          : {}),
-        raw: created ? JSON.parse(JSON.stringify(created)) : null,
-      };
-      allEvents = [...allEvents, createdEvent];
-      applySelectedEvents();
-
-      // Close modal immediately after successful API call
-      newEventModal = false;
-      modalDirty = false;
-      setError('');
-      setSuccess(isTodo ? 'Task created successfully' : 'Event created successfully');
-
-      // Cache in background (don't block on this) - sanitize to avoid postMessage clone errors
-      const eventsToCache = sanitizeForWorker(
-        allEvents.filter(
-          (ev) =>
-            ((ev as Record<string, unknown>).calendarId ||
-              (ev as Record<string, unknown>).calendar_id) === resolvedCalendarId,
-        ),
-      );
-      db.meta
-        .put({
-          key: getEventsCacheKey(getAccountKey(), resolvedCalendarId as string),
-          value: eventsToCache,
-          updatedAt: Date.now(),
-        })
-        .catch((e) => console.warn('[Calendar] Failed to cache events:', e));
-
-      if (eventsScope === 'all') {
-        db.meta
-          .put({
-            key: getAllEventsCacheKey(getAccountKey()),
-            value: sanitizeForWorker(allEvents),
-            updatedAt: Date.now(),
-          })
-          .catch((e) => console.warn('[Calendar] Failed to cache all events:', e));
-      }
-
-      // Queue invites in background (events only — tasks have no attendees and may have no range)
-      if (range && attendees && attendees.trim()) {
-        queueEventInvites({
-          title,
-          start: range.start,
-          end: range.end,
-          allDay,
-          description,
-          location,
-          url,
-          timezone,
-          attendees,
-          uid: (created?.uid || created?.id || created?.event_id || createdEvent.id) as string,
-        })
-          .then((inviteResult) => {
-            if (inviteResult?.queued) {
-              const count = inviteResult.queued;
-              toasts?.show?.(
-                `Invite${count === 1 ? '' : 's'} queued for ${count} attendee${count === 1 ? '' : 's'}.`,
-                'success',
-              );
-            }
-          })
-          .catch((inviteErr) => {
-            console.error('[Calendar] Failed to queue invites:', inviteErr);
+        uid: (created?.uid || created?.id || created?.event_id || realId) as string,
+      })
+        .then((inviteResult) => {
+          if (inviteResult?.queued) {
+            const count = inviteResult.queued;
             toasts?.show?.(
-              'Failed to queue invites. You can export the event and share the .ics.',
-              'warning',
+              `Invite${count === 1 ? '' : 's'} queued for ${count} attendee${count === 1 ? '' : 's'}.`,
+              'success',
             );
-          });
-      }
-    } catch (err) {
-      setError((err as Error)?.message || 'Unable to create event.');
-    } finally {
-      savingEvent = false;
+          }
+        })
+        .catch((inviteErr) => {
+          console.error('[Calendar] Failed to queue invites:', inviteErr);
+          toasts?.show?.(
+            'Failed to queue invites. You can export the event and share the .ics.',
+            'warning',
+          );
+        });
     }
   };
 
@@ -3249,15 +3275,14 @@
       allDayStartDate,
       allDayEndDate,
     } = dateResult.values;
+    const previousEvent = allEvents.find(
+      (ev) => ((ev as Record<string, unknown>).id || (ev as Record<string, unknown>).uid) === id,
+    ) as Record<string, unknown> | undefined;
+    const previousCalendarId = (previousEvent?.calendarId as string) || '';
+
+    let icalData: string;
     try {
-      const previousCalendarId =
-        (
-          allEvents.find(
-            (ev) =>
-              ((ev as Record<string, unknown>).id || (ev as Record<string, unknown>).uid) === id,
-          ) as Record<string, unknown> | undefined
-        )?.calendarId || '';
-      const icalData = isTodo
+      icalData = isTodo
         ? generateICalTodo({
             summary: title,
             description: description || '',
@@ -3293,86 +3318,79 @@
             startValue: icalStartValue,
             endValue: icalEndValue,
           });
-      const persistId = id.includes('::') ? id.split('::')[0] : id;
-      const payload = { id: persistId, calendar_id: calendarId, ical: icalData };
-      await Remote.request('CalendarEventUpdate', payload, {
-        method: 'PUT',
-        pathOverride: `/v1/calendar-events/${persistId}`,
-      });
-      allEvents = allEvents.map((ev) =>
-        (ev as Record<string, unknown>).id === id
-          ? {
-              ...ev,
-              title,
-              start: startISO,
-              end: endISO,
-              calendarId,
-              description,
-              location,
-              url,
-              timezone,
-              attendees,
-              notify: Number(notify) || 0,
-              ...(isTodo
-                ? {
-                    status: status || 'NEEDS-ACTION',
-                    completedAt: completedAt || '',
-                    percentComplete: Number(percentComplete) || 0,
-                  }
-                : {}),
-              ...(allDayResolved
-                ? { allDay: true, allDayStart: allDayStartDate, allDayEnd: allDayEndDate }
-                : { allDay: false }),
-            }
-          : ev,
+    } catch (err) {
+      setError((err as Error)?.message || 'Unable to update event.');
+      return;
+    }
+    const persistId = id.includes('::') ? id.split('::')[0] : id;
+
+    // Apply the edit locally and close the modal right away. The PUT runs
+    // below and restores the previous version if it fails.
+    const patch = {
+      title,
+      start: startISO,
+      end: endISO,
+      calendarId,
+      description,
+      location,
+      url,
+      timezone,
+      attendees,
+      notify: Number(notify) || 0,
+      ...(isTodo
+        ? {
+            status: status || 'NEEDS-ACTION',
+            completedAt: completedAt || '',
+            percentComplete: Number(percentComplete) || 0,
+          }
+        : {}),
+      ...(allDayResolved
+        ? { allDay: true, allDayStart: allDayStartDate, allDayEnd: allDayEndDate }
+        : { allDay: false }),
+    };
+    const token = ++pendingMutationToken;
+    pendingEventMutations.set(id, { token, patch });
+    allEvents = allEvents.map((ev) =>
+      (ev as Record<string, unknown>).id === id
+        ? { ...(ev as Record<string, unknown>), ...patch }
+        : ev,
+    );
+    applySelectedEvents();
+    setError('');
+    setSuccess(isTodo ? 'Task updated successfully' : 'Event updated successfully');
+    editEventModal = false;
+    persistEventsCache(calendarId);
+    if (previousCalendarId && previousCalendarId !== calendarId) {
+      persistEventsCache(previousCalendarId);
+    }
+
+    try {
+      await serializeEventWrite(persistId, () =>
+        Remote.request(
+          'CalendarEventUpdate',
+          { id: persistId, calendar_id: calendarId, ical: icalData },
+          { method: 'PUT', pathOverride: `/v1/calendar-events/${persistId}` },
+        ),
       );
-      applySelectedEvents();
-
-      // Close modal immediately after successful API call
-      setError('');
-      setSuccess(isTodo ? 'Task updated successfully' : 'Event updated successfully');
-      editEventModal = false;
-
-      // Cache in background (don't block on this) - sanitize to avoid postMessage clone errors
-      db.meta
-        .put({
-          key: getEventsCacheKey(getAccountKey(), calendarId),
-          value: sanitizeForWorker(
-            allEvents.filter(
-              (ev) =>
-                ((ev as Record<string, unknown>).calendarId ||
-                  (ev as Record<string, unknown>).calendar_id) === calendarId,
-            ),
-          ),
-          updatedAt: Date.now(),
-        })
-        .catch((e) => console.warn('[Calendar] Failed to cache events:', e));
-
-      if (previousCalendarId && previousCalendarId !== calendarId) {
-        db.meta
-          .put({
-            key: getEventsCacheKey(getAccountKey(), previousCalendarId as string),
-            value: sanitizeForWorker(
-              allEvents.filter(
-                (ev) =>
-                  ((ev as Record<string, unknown>).calendarId ||
-                    (ev as Record<string, unknown>).calendar_id) === previousCalendarId,
-              ),
-            ),
-            updatedAt: Date.now(),
-          })
-          .catch((e) => console.warn('[Calendar] Failed to cache previous calendar events:', e));
-      }
-      if (eventsScope === 'all') {
-        db.meta
-          .put({
-            key: getAllEventsCacheKey(getAccountKey()),
-            value: sanitizeForWorker(allEvents),
-            updatedAt: Date.now(),
-          })
-          .catch((e) => console.warn('[Calendar] Failed to cache all events:', e));
+      if (pendingEventMutations.get(id)?.token === token) {
+        pendingEventMutations.delete(id);
       }
     } catch (err) {
+      // Roll back only if no newer change superseded this one. A later
+      // write sends the full item state, so its outcome wins either way.
+      if (pendingEventMutations.get(id)?.token === token) {
+        pendingEventMutations.delete(id);
+        if (previousEvent) {
+          allEvents = allEvents.map((ev) =>
+            (ev as Record<string, unknown>).id === id ? previousEvent : ev,
+          );
+          applySelectedEvents();
+          persistEventsCache(calendarId);
+          if (previousCalendarId && previousCalendarId !== calendarId) {
+            persistEventsCache(previousCalendarId);
+          }
+        }
+      }
       setError((err as Error)?.message || 'Unable to update event.');
     }
   };
@@ -3385,20 +3403,28 @@
   let pendingMutationToken = 0;
   const pendingEventMutations = new Map<
     string,
-    { token: number; patch: Record<string, unknown> | null }
+    { token: number; patch: Record<string, unknown> | null; insert?: boolean }
   >();
 
   const applyPendingEventMutations = (list: unknown[]): unknown[] => {
     if (!pendingEventMutations.size) return list;
+    const seen = new Set<string>();
     const result: unknown[] = [];
     for (const ev of list) {
-      const entry = pendingEventMutations.get((ev as Record<string, unknown>).id as string);
+      const id = (ev as Record<string, unknown>).id as string;
+      const entry = pendingEventMutations.get(id);
       if (!entry) {
         result.push(ev);
         continue;
       }
+      seen.add(id);
       if (entry.patch === null) continue;
       result.push({ ...(ev as Record<string, unknown>), ...entry.patch });
+    }
+    // Pending creates are not on the server yet, so a fetched list would
+    // silently drop them. Append any the fetch did not return.
+    for (const [id, entry] of pendingEventMutations) {
+      if (entry.insert && entry.patch && !seen.has(id)) result.push(entry.patch);
     }
     return result;
   };
