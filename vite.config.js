@@ -96,6 +96,7 @@ function libsodiumResolverPlugin() {
 
 export default defineConfig({
   root: '.',
+  base: '/mail.forwardemail.net/',
   publicDir: 'public',
   // Inject version at build time for version negotiation
   define: {

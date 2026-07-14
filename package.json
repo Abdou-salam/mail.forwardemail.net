@@ -47,7 +47,9 @@
     "tauri:ios:build": "bash scripts/ios-build.sh",
     "tauri:icon": "tauri icon src-tauri/app-icon-manifest.json",
     "tauri:signer:generate": "tauri signer generate -w ~/.tauri/forwardemail.key",
-    "version": "node scripts/sync-version.cjs && git add src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock"
+    "version": "node scripts/sync-version.cjs && git add src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock",
+    "predeploy": "pnpm run build",
+    "deploy": "gh-pages -d dist"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",
@@ -132,6 +134,7 @@
     "eslint-config-prettier": "^9.1.2",
     "eslint-plugin-svelte": "^2.46.1",
     "fake-indexeddb": "6.2.5",
+    "gh-pages": "6.3.0",
     "globals": "^14.0.0",
     "husky": "^9.1.7",
     "jsdom": "^25.0.1",
