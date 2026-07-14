@@ -1,0 +1,427 @@
+name: Release Desktop (Tauri)
+
+on:
+  push:
+    tags:
+      - 'desktop-v*'
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      release_id:
+        required: false
+        type: string
+        description: 'Existing GitHub Release ID to upload artifacts to (skips creating a new release)'
+      release_draft:
+        required: false
+        type: string
+        description: 'Whether the target GitHub release is currently a draft'
+      skip_e2e_gate:
+        required: false
+        type: boolean
+        default: false
+        description: 'Skip the internal e2e-webview gate. release.yml sets this true because it already runs the e2e-webview gate once for both desktop and mobile; without it the full 5-platform suite runs twice per release. Standalone desktop-v* / dispatch runs leave it false so they stay self-gated.'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. desktop-v0.1.0)'
+        required: true
+        type: string
+
+# Minimal permissions — contents:write for creating releases; id-token and
+# attestations:write so actions/attest-build-provenance can publish SLSA
+# attestations to the Sigstore transparency log.
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: release-desktop
+  cancel-in-progress: false
+
+env:
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: short
+  NODE_VERSION: '22'
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  build-and-release:
+    # Use the 'release' environment for scoped secrets
+    environment: release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-15
+            target: aarch64-apple-darwin
+            label: macOS-arm64
+            args: --target aarch64-apple-darwin
+          - platform: macos-15-intel
+            target: x86_64-apple-darwin
+            label: macOS-x64
+            args: --target x86_64-apple-darwin
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            label: Linux-x64
+            args: --target x86_64-unknown-linux-gnu
+          - platform: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            label: Linux-arm64
+            args: --target aarch64-unknown-linux-gnu --bundles deb,rpm
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            label: Windows-x64
+            args: --target x86_64-pc-windows-msvc
+          - platform: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            label: Windows-arm64
+            args: --target aarch64-pc-windows-msvc --bundles nsis
+
+    runs-on: ${{ matrix.platform }}
+    name: Release (${{ matrix.label }})
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (pinned 2026-05-12; bump periodically to track new Rust releases)
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04' || matrix.platform == 'ubuntu-22.04-arm'
+        run: |
+          for i in 1 2 3; do sudo apt-get update && break || sleep $((i*5)); done
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            libfuse2 \
+            xdg-utils
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Sync version from package.json to tauri.conf.json + Cargo.toml
+        # Safeguard: `np`/`pnpm version` should run this via the package.json
+        # "version" hook, but if it doesn't (e.g. version bump didn't include
+        # the updated files), artifact filenames would use a stale version.
+        shell: bash
+        run: node scripts/sync-version.cjs
+
+      - name: Resolve release metadata
+        id: release_meta
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            TAG_NAME="v${{ inputs.version }}"
+            RELEASE_NAME="Forward Email v${{ inputs.version }}"
+          else
+            RAW_TAG="${{ github.event.inputs.tag || github.ref_name }}"
+            if [[ "$RAW_TAG" == desktop-v* ]]; then
+              DISPLAY_VERSION="${RAW_TAG#desktop-v}"
+              TAG_NAME="$RAW_TAG"
+              RELEASE_NAME="Forward Email Desktop v${DISPLAY_VERSION}"
+            elif [[ "$RAW_TAG" == v* ]]; then
+              DISPLAY_VERSION="${RAW_TAG#v}"
+              TAG_NAME="$RAW_TAG"
+              RELEASE_NAME="Forward Email v${DISPLAY_VERSION}"
+            else
+              TAG_NAME="v$RAW_TAG"
+              RELEASE_NAME="Forward Email v${RAW_TAG}"
+            fi
+          fi
+          echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          echo "release_name=$RELEASE_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve release ID (prefer published over draft)
+        id: resolve_release
+        uses: ./.github/actions/resolve-release
+        with:
+          tag: ${{ steps.release_meta.outputs.tag_name }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # The updater key signs the .sig files + latest.json that the
+      # in-app auto-updater verifies (pubkey committed in tauri.conf.json).
+      # If it's absent, the "Enable updater artifacts" step below silently
+      # no-ops and the release ships with NO latest.json — every installed
+      # user's auto-update breaks with no error anywhere. Fail closed so a
+      # misconfigured run is a loud red X. Break-glass: set repo variable
+      # ALLOW_NO_UPDATER=true to ship a one-off release without auto-update.
+      - name: Require updater signing key (fail-closed)
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          ALLOW_NO_UPDATER: ${{ vars.ALLOW_NO_UPDATER }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            if [ "$ALLOW_NO_UPDATER" = "true" ]; then
+              echo "::warning::Building ${{ matrix.label }} WITHOUT updater artifacts (ALLOW_NO_UPDATER=true). Installed users' auto-update will not see this release."
+            else
+              echo "::error::Refusing to build a desktop release without TAURI_SIGNING_PRIVATE_KEY — auto-update artifacts (latest.json/.sig) would be silently omitted, breaking auto-update for all installed users. Provision the secret, or set repo variable ALLOW_NO_UPDATER=true to bypass intentionally."
+              exit 1
+            fi
+          else
+            echo "Updater signing key present for ${{ matrix.label }} — updater artifacts will be generated."
+          fi
+
+      - name: Enable updater artifacts
+        if: env.TAURI_SIGNING_PRIVATE_KEY != ''
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        shell: node {0}
+        run: |
+          const fs = require('fs');
+          const conf = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
+          // pubkey is already committed in tauri.conf.json
+          conf.bundle.createUpdaterArtifacts = true;
+          fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(conf, null, 2) + '\n');
+
+      # Defensive check: tauri-action silently produces an unsigned macOS
+      # bundle if any signing/notarization secret is empty at build time.
+      # When that ships, users see "the application can't be opened" with
+      # no Gatekeeper dialog because taskgated rejects the binary before
+      # dyld_start completes (CS_LINKER_SIGNED only, no Developer ID).
+      # Fail fast here so a misconfigured run is a loud red X instead of
+      # a broken release.
+      - name: Require macOS signing secrets on macOS rows
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          missing=()
+          [ -z "$APPLE_CERTIFICATE" ]          && missing+=("APPLE_CERTIFICATE")
+          [ -z "$APPLE_CERTIFICATE_PASSWORD" ] && missing+=("APPLE_CERTIFICATE_PASSWORD")
+          [ -z "$APPLE_SIGNING_IDENTITY" ]     && missing+=("APPLE_SIGNING_IDENTITY")
+          [ -z "$APPLE_ID" ]                   && missing+=("APPLE_ID")
+          [ -z "$APPLE_PASSWORD" ]             && missing+=("APPLE_PASSWORD")
+          [ -z "$APPLE_TEAM_ID" ]              && missing+=("APPLE_TEAM_ID")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Refusing to build unsigned macOS bundle on ${{ matrix.label }}. Missing secrets: ${missing[*]}"
+            exit 1
+          fi
+          echo "All Apple signing/notary secrets present for ${{ matrix.label }}."
+
+      - name: Build and release Tauri app
+        uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Tauri updater signing key (generates .sig files for auto-update)
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # macOS code signing and notarization
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Windows code signing (optional)
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        with:
+          tagName: ${{ steps.release_meta.outputs.tag_name }}
+          releaseName: ${{ steps.release_meta.outputs.release_name }}
+          releaseId: ${{ steps.resolve_release.outputs.release_id }}
+          # Always upload to a DRAFT release; the publish-release job at the
+          # end of this workflow promotes the draft → published only after
+          # every matrix row passed (build + signing + structural asserts +
+          # launch-survives smoke). Prevents the v0.10.17–v0.10.21 failure
+          # class where a release was created and visible to users before
+          # all rows had verified the bundles open.
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
+
+      # Structural asserts on the macOS bundle BEFORE we publish it.
+      # Catches the class of bug where codesign + notarization succeed at
+      # build time but the kernel rejects the binary at exec time due to
+      # an entitlement-vs-cert mismatch (see
+      # docs/desktop-postmortem-macos-entitlements-2026-05-19.md for the
+      # 0.10.17–0.10.21 incident this guards against).
+      #
+      # Three checks, ordered cheap-to-expensive:
+      #   1. codesign authority is the Forward Email LLC Developer ID.
+      #   2. spctl reports "Notarized Developer ID" — Gatekeeper would
+      #      accept it.
+      #   3. Entitlement allowlist: nothing outside the known-good set is
+      #      embedded. Specifically refuses aps-environment, the entitlement
+      #      that broke 0.10.17–0.10.21.
+      #   4. Launch-survives test: exec the binary and verify it lives ≥3s
+      #      without being SIGKILLed. Catches taskgated rejection that
+      #      codesign and spctl don't see.
+      - name: Verify macOS bundle (codesign + entitlements + launch)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -u
+          APP="src-tauri/target/${{ matrix.target }}/release/bundle/macos/Forward Email.app"
+          BIN="$APP/Contents/MacOS/forwardemail-desktop"
+          if [ ! -d "$APP" ]; then
+            echo "::error::Bundle not found at $APP — tauri-action did not produce a .app"
+            exit 1
+          fi
+
+          echo "=== 1. codesign authority ==="
+          if ! codesign -dv --verbose=4 "$APP" 2>&1 | tee /tmp/cs.out; then
+            echo "::error::codesign -dv failed — bundle is not signed"
+            exit 1
+          fi
+          if ! grep -q "Authority=Developer ID Application: Forward Email LLC" /tmp/cs.out; then
+            echo "::error::Bundle is not signed with Forward Email LLC Developer ID"
+            grep "Authority=" /tmp/cs.out || true
+            exit 1
+          fi
+          if ! grep -q "TeamIdentifier=FH83QMJS7P" /tmp/cs.out; then
+            echo "::error::Bundle TeamIdentifier does not match Forward Email LLC (FH83QMJS7P)"
+            exit 1
+          fi
+
+          echo "=== 2. spctl notarization ==="
+          if ! spctl -a -vvv "$APP" 2>&1 | tee /tmp/spctl.out; then
+            echo "::error::spctl rejects the bundle"
+            exit 1
+          fi
+          if ! grep -q "Notarized Developer ID" /tmp/spctl.out; then
+            echo "::error::Bundle is not notarized — Gatekeeper would reject it"
+            exit 1
+          fi
+
+          echo "=== 3. entitlement allowlist ==="
+          codesign -d --entitlements - "$APP" 2>&1 | tee /tmp/ents.out
+          if grep -q "aps-environment" /tmp/ents.out; then
+            echo "::error::aps-environment entitlement present on macOS Developer ID bundle. The Forward Email LLC cert is not APNs-authorized; the kernel will SIGKILL on launch. See docs/desktop-postmortem-macos-entitlements-2026-05-19.md"
+            exit 1
+          fi
+
+          echo "=== 4. launch-survives test (3s) ==="
+          "$BIN" >/tmp/launch.out 2>&1 &
+          PID=$!
+          sleep 3
+          if kill -0 "$PID" 2>/dev/null; then
+            echo "Bundle survived 3 seconds — codesign/entitlements look OK at exec time"
+            kill "$PID" 2>/dev/null || true
+            wait "$PID" 2>/dev/null || true
+          else
+            echo "::error::Binary exited within 3s of launch. This indicates taskgated rejected the signed bundle — usually an entitlement-vs-cert mismatch. Last output from the binary:"
+            cat /tmp/launch.out || true
+            echo ""
+            echo "Searching for matching crash log…"
+            log show --predicate 'process == "forwardemail-desktop" AND messageType == fault' --last 1m 2>/dev/null | head -40 || true
+            exit 1
+          fi
+
+      # SLSA build provenance attestation. Publishes a signed attestation
+      # to the Sigstore transparency log binding each desktop bundle to
+      # this workflow run + commit. Users verify with:
+      #     gh attestation verify <file> --owner forwardemail
+      # Globs that don't match on this matrix row (e.g. msi on macOS) are
+      # silently skipped by the action.
+      - name: Attest desktop build provenance
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
+        with:
+          subject-path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
+            src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
+            src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*-setup.exe
+            src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
+            src-tauri/target/${{ matrix.target }}/release/bundle/rpm/*.rpm
+            src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+
+  # E2E webview gate: build the Tauri binary with the webdriver feature
+  # and run the cross-platform spec suite (incl. native-attachment-add /
+  # native-attachment-open / native-compose-window) on the same matrix
+  # we ship. Catches platform-native crash classes (NSOpenPanel, WebKit
+  # insets, attachment OOM) that the build-and-release verification step
+  # cannot exercise because it only launches the binary for 3 seconds.
+  e2e-webview-gate:
+    name: E2E webview (gate)
+    # Skipped when release.yml orchestrates (it already ran this gate once for
+    # both desktop + mobile); runs for standalone desktop-v* / dispatch.
+    if: ${{ inputs.skip_e2e_gate != true }}
+    uses: ./.github/workflows/e2e-webview.yml
+    with:
+      release_gate: true
+    secrets: inherit
+
+  # Release gate: promote the draft release to published ONLY after every
+  # build-and-release matrix row AND every e2e-webview matrix row passed.
+  # With `needs:` set, this job is automatically skipped when any
+  # dependency failed, leaving the release as a draft that the user can
+  # inspect and either fix and re-run or delete. Prevents partial/broken
+  # releases from being user-visible (the v0.10.17–v0.10.21 failure mode
+  # where an unsigned bundle shipped under a published tag).
+  publish-release:
+    name: Publish release (gate)
+    needs: [build-and-release, e2e-webview-gate]
+    # `!cancelled()` (a status function) lets this run even when the gate was
+    # deliberately skipped (skip_e2e_gate, set by release.yml, which gated
+    # upstream). Still blocks on a failed build or a failed/cancelled gate, so a
+    # broken build never publishes; a 'skipped' gate is treated as satisfied.
+    if: ${{ !cancelled()
+      && needs.build-and-release.result == 'success'
+      && (needs.e2e-webview-gate.result == 'success' || needs.e2e-webview-gate.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    environment: release
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Resolve release metadata
+        id: release_meta
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            TAG_NAME="v${{ inputs.version }}"
+          else
+            RAW_TAG="${{ github.event.inputs.tag || github.ref_name }}"
+            case "$RAW_TAG" in
+              desktop-v*|v*) TAG_NAME="$RAW_TAG" ;;
+              *)             TAG_NAME="v$RAW_TAG" ;;
+            esac
+          fi
+          echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Promote draft to published
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.release_meta.outputs.tag_name }}"
+          echo "Promoting $TAG from draft to published…"
+          # `gh release edit` is idempotent — if the release is already
+          # published this is a no-op rather than an error, which is the
+          # behavior we want for any manually-published re-runs.
+          gh release edit "$TAG" --draft=false
+          echo "Release $TAG is now published."

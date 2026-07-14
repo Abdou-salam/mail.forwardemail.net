@@ -1,0 +1,279 @@
+name: E2E WebView (Desktop)
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+    paths:
+      - 'src-tauri/**'
+      - 'src/**'
+      - 'e2e-webview/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/e2e-webview.yml'
+  push:
+    branches: [main]
+  workflow_call:
+    inputs:
+      release_gate:
+        description: 'Called from release.yml as a pre-build gate; bypasses the chore(release): skip guard so the release run is not skipped along with the duplicate direct-push run.'
+        type: boolean
+        default: false
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-webview-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  webview-e2e:
+    # Skip on release commits — release.yml invokes this workflow via
+    # workflow_call as a gate, so the standalone push-to-main run that np's
+    # "chore(release): X.Y.Z" commit would trigger is a duplicate.
+    #
+    # The `inputs.release_gate` clause is load-bearing: when called via
+    # workflow_call, github.event_name + head_commit are inherited from the
+    # caller (release.yml, triggered by `push: tags: v*` pointing at the
+    # chore(release) commit), so without this bypass the gate-mode invocation
+    # would also be skipped — silently skipping every downstream build job
+    # in release.yml and stalling the release with no artifacts.
+    if: |
+      (github.event.pull_request.draft == false || github.event_name != 'pull_request')
+      && !(github.event_name == 'push'
+           && startsWith(github.event.head_commit.message, 'chore(release):')
+           && !inputs.release_gate)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux is now gating like every other platform. It was advisory while
+          # we chased WebKitGTK flakiness; the root cause (IndexedDB stalls under
+          # WebKitGTK + the tauri:// scheme, and the db blocking boot) is fixed —
+          # demo mode is IndexedDB-free and bootstrap no longer waits on the db —
+          # so Linux should be deterministically green.
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            label: linux-22
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            label: linux-24
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            label: windows-x64
+          # macOS rows are gated to push:main / workflow_dispatch only — the
+          # `gate` step short-circuits all subsequent work on pull_request,
+          # leaving only the runner spin-up (~30 s) as cost. macOS runners
+          # are 10× the price of Linux, so this materially cuts CI bill on a
+          # busy PR queue. Re-evaluate after the suite has been green for two
+          # weeks.
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            label: macos-x64
+            push_only: true
+          - os: macos-15
+            target: aarch64-apple-darwin
+            label: macos-arm64
+            push_only: true
+    runs-on: ${{ matrix.os }}
+    name: WebView E2E (${{ matrix.label }})
+    timeout-minutes: 45
+
+    steps:
+      - name: Gate macOS rows on PR
+        id: gate
+        shell: bash
+        run: |
+          if [ "${{ matrix.push_only }}" = "true" ] && [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping ${{ matrix.label }} on PR (cost gating). Will run on push to main."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.gate.outputs.skip != 'true'
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: steps.gate.outputs.skip != 'true' && runner.os == 'Linux'
+        run: |
+          for i in 1 2 3; do
+            if sudo apt-get update; then break; fi
+            sleep $((i*5))
+          done
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libgtk-3-dev \
+            webkit2gtk-driver \
+            xvfb
+
+      - name: Bootstrap rustup (macOS, unconditional)
+        if: steps.gate.outputs.skip != 'true' && runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -u
+          # The macos-15 arm64 runner image can leave ~/.cargo/bin/cargo
+          # pointing at rustup-init (the installer) instead of the rustup
+          # proxy, which breaks the `cargo metadata` call Tauri makes during
+          # the build. Conditional repair was unreliable (detection misses,
+          # plus swatinem/rust-cache restoring a poisoned ~/.cargo/bin after
+          # the repair ran), so we now reinstall unconditionally on macOS
+          # and prevent rust-cache from caching ~/.cargo/bin below.
+          echo "=== pre-repair diagnostics ==="
+          echo "PATH=$PATH"
+          for tool in cargo rustc rustup rustup-init; do
+            p=$(command -v "$tool" 2>/dev/null || echo "<not on PATH>")
+            echo "$tool -> $p"
+            if [ -e "$p" ]; then
+              file "$p" 2>/dev/null || true
+            fi
+          done
+          echo "==============================="
+          rm -rf "$HOME/.cargo/bin" "$HOME/.rustup"
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --no-modify-path --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          echo "=== post-repair diagnostics ==="
+          ls -la "$HOME/.cargo/bin"
+          "$HOME/.cargo/bin/rustup" --version
+          echo "==============================="
+
+      - name: Install Rust toolchain
+        if: steps.gate.outputs.skip != 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        if: steps.gate.outputs.skip != 'true'
+        uses: swatinem/rust-cache@v2
+        continue-on-error: true
+        with:
+          workspaces: src-tauri -> target
+          # v2 bumps `shared-key` to invalidate any previously-saved cache
+          # whose ~/.cargo/bin contained a broken `cargo` (rustup-init) on
+          # macos-15 arm64. Pair with `cache-bin: false` so the bin dir
+          # never gets cached again — cargo-installed tooling we actually
+          # want to cache (tauri-webdriver) has its own actions/cache step.
+          shared-key: e2e-webview-v2-${{ matrix.label }}
+          cache-bin: false
+
+      - name: Setup Node.js
+        if: steps.gate.outputs.skip != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        if: steps.gate.outputs.skip != 'true'
+        # No `version:` — action-setup reads packageManager from package.json,
+        # and specifying both causes ERR_PNPM_BAD_PM_VERSION.
+        uses: pnpm/action-setup@v4
+
+      - name: Install root dependencies
+        if: steps.gate.outputs.skip != 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Install e2e-webview dependencies
+        if: steps.gate.outputs.skip != 'true'
+        working-directory: e2e-webview
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache tauri-webdriver intermediary
+        if: steps.gate.outputs.skip != 'true'
+        id: cache-twd
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/tauri-webdriver
+            ~/.cargo/bin/tauri-webdriver.exe
+          # Include matrix.label so ubuntu-22.04 and ubuntu-24.04 don't share
+          # a binary — a cache populated on 24.04 links against GLIBC_2.39
+          # and won't run on 22.04 ("GLIBC_2.39 not found").
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ matrix.label }}-tauri-webdriver-v0.1.2
+
+      - name: Install tauri-webdriver intermediary
+        if: steps.gate.outputs.skip != 'true' && steps.cache-twd.outputs.cache-hit != 'true'
+        run: cargo install tauri-webdriver --locked
+
+      - name: Build Tauri binary with webdriver feature
+        if: steps.gate.outputs.skip != 'true'
+        # `tauri build --debug` (not plain cargo build) is required so
+        # frontendDist is embedded — otherwise the WebView fails with
+        # AssetNotFound("index.html") at runtime. --no-bundle skips the
+        # DMG/MSI step we don't need for tests.
+        run: pnpm exec tauri build --debug --no-bundle --features webdriver --target ${{ matrix.target }}
+
+      - name: Run E2E tests (Linux + Xvfb)
+        id: test-linux
+        if: steps.gate.outputs.skip != 'true' && runner.os == 'Linux'
+        continue-on-error: true
+        working-directory: e2e-webview
+        shell: bash
+        env:
+          TAURI_TARGET: ${{ matrix.target }}
+          # WebKitGTK 2.40+ (both ubuntu-22.04 and 24.04) enables its
+          # DMABUF-based accelerated compositing renderer by default. Under
+          # Xvfb there is no GPU, so that path stalls — first paint crawls and
+          # the demo-readiness gate routinely overruns its timeout (the entire
+          # Linux suite ran ~17x slower per test than Windows). Forcing the
+          # renderer off restores software-rendered paint at native speed.
+          WEBKIT_DISABLE_DMABUF_RENDERER: '1'
+          # WebKitGTK/GTK tries to reach the AT-SPI accessibility bus
+          # (org.a11y.Bus) on every app launch. Under Xvfb that service does
+          # not exist; on ubuntu-24.04 dbus-broker holds the activation request
+          # for the full 25s DBus timeout before returning ServiceUnknown,
+          # paid once PER spec's app relaunch (x17 specs) — which pushed the
+          # job past its 45-minute wall (22.04 returns the error promptly, so
+          # it never stalled). Disabling the AT-SPI bridge skips the lookup
+          # entirely. NO_AT_BRIDGE covers GTK3 (libwebkit2gtk-4.1); GTK_A11Y
+          # is the GTK4/webkitgtk-6.0 equivalent and harmless on GTK3.
+          NO_AT_BRIDGE: '1'
+          GTK_A11Y: none
+        run: xvfb-run --auto-servernum -- pnpm test
+
+      - name: Run E2E tests (macOS / Windows)
+        id: test-other
+        if: steps.gate.outputs.skip != 'true' && runner.os != 'Linux'
+        continue-on-error: true
+        working-directory: e2e-webview
+        shell: bash
+        env:
+          TAURI_TARGET: ${{ matrix.target }}
+        run: pnpm test
+
+      - name: Upload test reports
+        if: always() && steps.gate.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-webview-${{ matrix.label }}-reports
+          path: e2e-webview/reports/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload failure screenshots
+        if: ${{ steps.gate.outputs.skip != 'true' && (steps.test-linux.outcome == 'failure' || steps.test-other.outcome == 'failure') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-webview-${{ matrix.label }}-screenshots
+          path: e2e-webview/screenshots/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Fail job if tests failed
+        # The test steps use continue-on-error so the artifact-upload steps
+        # above always run on failure. This gate restores red CI when any
+        # spec fails — without it, a failing matrix row reports green.
+        if: ${{ steps.gate.outputs.skip != 'true' && (steps.test-linux.outcome == 'failure' || steps.test-other.outcome == 'failure') }}
+        shell: bash
+        run: |
+          echo "::error::E2E tests failed on ${{ matrix.label }} — see job logs and uploaded artifacts."
+          exit 1

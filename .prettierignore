@@ -1,0 +1,7 @@
+dist
+node_modules
+coverage
+pnpm-lock.yaml
+
+# Generated Vite bundle (scripts/build-sw-normalize.mjs)
+public/sw-message-normalize.js

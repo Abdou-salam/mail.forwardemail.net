@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.forwardemail.net wss://api.forwardemail.net; worker-src 'self' blob:; frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; media-src 'none'"
+    />
+    <title>Compose — Forward Email</title>
+    <script type="module" crossorigin src="/mail.forwardemail.net/assets/compose-CyL0f9f6.js"></script>
+    <link rel="modulepreload" crossorigin href="/mail.forwardemail.net/assets/vendor-BcGySDph.js">
+    <link rel="modulepreload" crossorigin href="/mail.forwardemail.net/assets/main-CXI8DnWe.js">
+    <link rel="stylesheet" crossorigin href="/mail.forwardemail.net/assets/main-CIPDewqC.css">
+  </head>
+  <body>
+    <div id="compose-root"></div>
+    <div id="toasts-root"></div>
+    <script>
+      // Fatal-error diagnostic overlay — see index.html for full notes.
+      // Registered before /src/compose-main.ts so it catches module-init
+      // failures in the compose window's bundle (which has the same dep
+      // graph risks as the main window).
+      (function () {
+        var SHOWN = false;
+        // See index.html: CSP violations originating from browser
+        // extensions (they often inject eval()) are outside the app's
+        // control and must not trigger the fatal overlay.
+        function isExtensionViolation(e) {
+          if (!e) return false;
+          var re =
+            /^(moz-extension|chrome-extension|safari-web-extension|safari-extension|webkit-masked-url|extension):/i;
+          return re.test(String(e.sourceFile || '')) || re.test(String(e.blockedURI || ''));
+        }
+        function showFatal(detail) {
+          if (SHOWN) {
+            var prev = document.getElementById('fe-fatal-error');
+            if (prev) {
+              prev.textContent += '\n\n' + detail;
+              return;
+            }
+          }
+          SHOWN = true;
+          var d = document.createElement('div');
+          d.id = 'fe-fatal-error';
+          d.style.cssText = [
+            'position:fixed',
+            'inset:0',
+            'z-index:2147483647',
+            'background:#1a1a1a',
+            'color:#f5f5f5',
+            'font:12px/1.45 ui-monospace,Menlo,Consolas,monospace',
+            'padding:16px 18px',
+            'overflow:auto',
+            'white-space:pre-wrap',
+            'word-break:break-word',
+          ].join(';');
+          d.textContent = detail;
+          (document.body || document.documentElement).appendChild(d);
+        }
+        function describe(label, err) {
+          var lines = [];
+          lines.push('Fatal (compose): ' + label);
+          lines.push('UA: ' + navigator.userAgent);
+          lines.push('URL: ' + location.href);
+          lines.push('Time: ' + new Date().toISOString());
+          lines.push('');
+          var name = (err && err.name) || 'Error';
+          var msg =
+            (err && (err.message || err.reason || (err.toString && err.toString()))) || String(err);
+          lines.push('Type: ' + name);
+          lines.push('Message: ' + msg);
+          if (err && err.fileName) lines.push('File: ' + err.fileName);
+          if (err && err.lineNumber != null) lines.push('Line: ' + err.lineNumber);
+          if (err && err.columnNumber != null) lines.push('Col: ' + err.columnNumber);
+          if (err && err.stack) {
+            lines.push('');
+            lines.push('Stack:');
+            lines.push(String(err.stack));
+          }
+          return lines.join('\n');
+        }
+        window.addEventListener(
+          'error',
+          function (event) {
+            var t = event.target;
+            if (t && t !== window && t.tagName) return;
+            var err = event.error || {
+              name: 'Error',
+              message: event.message || 'unknown error',
+              fileName: event.filename,
+              lineNumber: event.lineno,
+              columnNumber: event.colno,
+            };
+            try {
+              console.error('[fe-fatal][compose]', err, event);
+            } catch (_) {}
+            showFatal(describe('error', err));
+          },
+          true,
+        );
+        window.addEventListener('unhandledrejection', function (event) {
+          var reason = event.reason || { message: 'unhandled rejection' };
+          try {
+            console.error('[fe-fatal][compose][unhandledrejection]', reason);
+          } catch (_) {}
+          showFatal(describe('unhandledrejection', reason));
+        });
+        document.addEventListener('securitypolicyviolation', function (e) {
+          try {
+            console.error('[fe-fatal][compose][csp]', e);
+          } catch (_) {}
+          if (isExtensionViolation(e)) return;
+          showFatal(
+            [
+              'CSP violation',
+              'directive: ' + e.violatedDirective,
+              'effective: ' + e.effectiveDirective,
+              'blockedURI: ' + e.blockedURI,
+              'sourceFile: ' + e.sourceFile + ':' + e.lineNumber + ':' + e.columnNumber,
+              'sample: ' + (e.sample || ''),
+            ].join('\n'),
+          );
+        });
+      })();
+    </script>
+  </body>
+</html>

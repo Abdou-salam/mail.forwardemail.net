@@ -1,0 +1,104 @@
+version: 2
+updates:
+  # npm dependencies
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    reviewers:
+      - forwardemail/core
+    labels:
+      - dependencies
+    commit-message:
+      prefix: 'deps'
+      prefix-development: 'deps(dev)'
+    groups:
+      production-deps:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
+
+  # E2E webview harness (Vitest + raw webdriverio, isolated lockfile)
+  - package-ecosystem: npm
+    directory: /e2e-webview
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 4
+    reviewers:
+      - forwardemail/core
+    labels:
+      - dependencies
+      - e2e
+    groups:
+      e2e-webview-deps:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
+
+  # E2E mobile harness (Vitest + raw webdriverio, isolated lockfile)
+  - package-ecosystem: npm
+    directory: /e2e-mobile
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 4
+    reviewers:
+      - forwardemail/core
+    labels:
+      - dependencies
+      - e2e
+    groups:
+      e2e-mobile-deps:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
+
+  # GitHub Actions
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    reviewers:
+      - forwardemail/core
+    labels:
+      - ci
+      - dependencies
+    commit-message:
+      prefix: 'ci'
+    groups:
+      actions:
+        patterns:
+          - '*'
+
+  # Cargo (Tauri / Rust) dependencies
+  - package-ecosystem: cargo
+    directory: /src-tauri
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    reviewers:
+      - forwardemail/core
+    labels:
+      - rust
+      - dependencies
+    commit-message:
+      prefix: 'deps(rust)'
+    groups:
+      cargo-deps:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch

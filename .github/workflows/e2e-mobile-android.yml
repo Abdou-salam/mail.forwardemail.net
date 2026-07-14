@@ -1,0 +1,180 @@
+name: E2E Mobile (Android)
+
+on:
+  schedule:
+    - cron: '0 6 * * *' # 06:00 UTC nightly
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-mobile-android-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  android-e2e:
+    runs-on: ubuntu-22.04
+    name: Android E2E (API 34, x86_64)
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # KVM acceleration is required for the Android emulator on Linux runners.
+      # Without it the emulator falls back to software rendering and tests
+      # take 5–10× longer (and frequently time out).
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install Linux dependencies
+        run: |
+          for i in 1 2 3; do
+            if sudo apt-get update; then break; fi
+            sleep $((i*5))
+          done
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libssl-dev \
+            patchelf
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Rust toolchain (Android x86_64 only)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-linux-android
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: e2e-android
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        run: sdkmanager "ndk;27.0.12077973"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        # No `version:` — action-setup reads packageManager from package.json,
+        # and specifying both causes ERR_PNPM_BAD_PM_VERSION.
+        uses: pnpm/action-setup@v4
+
+      - name: Install root dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install e2e-mobile dependencies
+        working-directory: e2e-mobile
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Appium 2 + UiAutomator2 driver
+        # Pin uiautomator2 to 4.2.9 — the last release whose appium peerDep
+        # accepts Appium 2.x. Versions ≥5.0.0 require Appium ^3.0.0-rc.2,
+        # which is still RC. Bump together when Appium 3 ships stable.
+        run: |
+          npm install -g appium@^2
+          appium driver install uiautomator2@4.2.9
+
+      - name: Initialize Android project
+        run: pnpm tauri android init
+
+      - name: Build Android APK (debug, x86_64)
+        env:
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
+        run: pnpm tauri android build --apk --debug --target x86_64
+
+      - name: Run E2E in emulator
+        id: emulator-test
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          # AOSP "default", NOT google_apis: the google_apis image runs a heavy
+          # Google-services stack (Messages/Bugle, GMS, AiAiEcho launcher,
+          # WebView VariationsSeedServer) that pegged the emulator — logcat
+          # showed 1-second OpenGLRenderer jank and the device dropping to
+          # "offline" exactly at the WebView context switch (wdio retried
+          # setContext 3x, all hit the overloaded device). "default" has none of
+          # that storm, still ships a System WebView, and the smoke test needs
+          # no Google services.
+          target: default
+          arch: x86_64
+          profile: pixel_6
+          # The default AVD RAM (~2GB) OOM-killed the WebView renderer while it
+          # loaded the full webmail bundle (1.5MB JS + Dexie + a Chrome render
+          # process); give it generous RAM (the ubuntu runner has 16GB).
+          ram-size: 6144
+          heap-size: 1024
+          # Headless-CI stability: software GPU, no snapshot/animation/audio.
+          # (Overrides the action defaults, so the -no-window/-gpu flags must be
+          # repeated here.)
+          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          # The emulator-runner's parseScript() splits `script` on newlines and
+          # runs each line in its own `sh -c`, so a multi-line inline script
+          # breaks (the `if` line parses alone → "expecting fi") and loses
+          # variables between lines. Invoke a single committed bash file instead
+          # — it runs as one coherent shell. See e2e-mobile/run-android-e2e.sh.
+          script: bash e2e-mobile/run-android-e2e.sh
+
+      - name: Upload Appium log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: appium-log
+          path: appium.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload logcat
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-logcat
+          path: logcat.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-e2e-reports-api34
+          path: e2e-mobile/reports/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload failure screenshots
+        if: ${{ steps.emulator-test.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-e2e-screenshots-api34
+          path: e2e-mobile/screenshots/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # The emulator step uses continue-on-error so the artifact-upload steps
+      # above always run on failure. This gate restores a red job when the
+      # Appium run fails — without it a broken Android suite reported green.
+      - name: Fail job if E2E failed
+        if: ${{ steps.emulator-test.outcome == 'failure' }}
+        run: |
+          echo "::error::Android E2E failed — see the Appium log, reports, and screenshot artifacts."
+          exit 1

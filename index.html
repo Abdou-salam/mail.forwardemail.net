@@ -1,0 +1,503 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#20C1ED" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.forwardemail.net wss://api.forwardemail.net https://api.github.com; worker-src 'self' blob:; frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; manifest-src 'self'; media-src 'none'"
+    />
+    <title>Forward Email Webmail</title>
+
+    <!--
+      Paint the themed background before the JS/CSS bundle loads so a webview
+      reload/repaint shows the app's colour instead of white (most visible on
+      macOS Space switches, where WebKit discards the page and re-renders on
+      return). base.css sets the real theme once the bundle runs and supersedes
+      this.
+
+      This MUST be done via CSSOM in a <script> — NOT a <style> element or a
+      style="" attribute. An inline <style> makes Tauri inject a style-src nonce
+      into the built CSP, and a nonce disables 'unsafe-inline', which then blocks
+      every inline style attribute in the app (this caused the 0.11.7 release
+      regression: a flood of style-src-attr CSP violations → the error overlay →
+      a frozen UI). A <script> only triggers a script-src nonce, which the app
+      already relies on, and CSSOM style mutations are not subject to CSP.
+    -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem('webmail_theme') || '';
+          var dark;
+          if (t.indexOf('dark') !== -1) dark = true;
+          else if (t.indexOf('light') !== -1) dark = false;
+          else
+            dark = !!(
+              window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+            );
+          document.documentElement.style.backgroundColor = dark ? '#0a0a0a' : '#f5f7fb';
+        } catch (e) {}
+      })();
+    </script>
+
+    <link rel="manifest" href="/mail.forwardemail.net/manifest.json" />
+    <link rel="icon" href="/mail.forwardemail.net/favicon.ico" />
+    <link rel="icon" type="image/svg+xml" href="/mail.forwardemail.net/icons/favicon.svg" />
+    <link rel="alternate icon" type="image/png" sizes="32x32" href="/mail.forwardemail.net/icons/favicon-32x32.png" />
+    <link rel="alternate icon" type="image/png" sizes="16x16" href="/mail.forwardemail.net/icons/favicon-16x16.png" />
+    <link rel="apple-touch-icon" sizes="152x152" href="/mail.forwardemail.net/icons/apple-touch-icon.png" />
+    <link rel="preconnect" href="https://api.forwardemail.net" />
+    <link rel="dns-prefetch" href="https://api.forwardemail.net" />
+    <script type="module" crossorigin src="/mail.forwardemail.net/assets/main-IHA1hy05.js"></script>
+    <link rel="modulepreload" crossorigin href="/mail.forwardemail.net/assets/vendor-BcGySDph.js">
+    <link rel="modulepreload" crossorigin href="/mail.forwardemail.net/assets/main-CXI8DnWe.js">
+    <link rel="modulepreload" crossorigin href="/mail.forwardemail.net/assets/db-crypto-bridge-BkE-vKpm.js">
+    <link rel="stylesheet" crossorigin href="/mail.forwardemail.net/assets/main-CIPDewqC.css">
+    <link rel="stylesheet" crossorigin href="/mail.forwardemail.net/assets/main-D8FjNIyP.css">
+  </head>
+  <body id="rl-app">
+    <div class="fe-stars">
+      <canvas id="stars"></canvas>
+      <canvas id="stars2"></canvas>
+      <canvas id="stars3"></canvas>
+    </div>
+    <div class="fe-login-shell" style="display: none">
+      <div id="login-root"></div>
+    </div>
+
+    <div id="mailbox-root"></div>
+
+    <div id="contacts-root"></div>
+    <div id="calendar-root"></div>
+    <div id="profile-root"></div>
+    <div id="settings-root"></div>
+    <div id="diagnostics-root"></div>
+
+    <div id="compose-root"></div>
+    <div id="passphrase-root"></div>
+    <div id="toasts-root"></div>
+    <div id="app-lock-overlay"></div>
+
+    <!-- Fallback recovery UI for catastrophic errors before main JS loads -->
+    <div
+      id="fe-fallback-recovery"
+      style="
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: #0b1220;
+        z-index: 99999;
+        font-family: system-ui, sans-serif;
+      "
+    >
+      <div
+        style="
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          min-height: 100vh;
+          padding: 20px;
+        "
+      >
+        <div
+          style="
+            background: #1a1a2e;
+            border-radius: 12px;
+            padding: 32px;
+            max-width: 400px;
+            text-align: center;
+            color: #fff;
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+          "
+        >
+          <h2 style="margin: 0 0 16px; font-size: 20px">Unable to Load App</h2>
+          <p style="margin: 0 0 24px; color: #9ca3af; font-size: 14px; line-height: 1.5">
+            The app couldn't start properly. This may be due to a recent update or cached files.
+          </p>
+          <button
+            id="fe-fallback-clear-btn"
+            style="
+              background: #3b82f6;
+              color: #fff;
+              border: none;
+              padding: 12px 24px;
+              border-radius: 8px;
+              font-size: 14px;
+              cursor: pointer;
+              font-weight: 500;
+            "
+          >
+            Clear Cache & Reload
+          </button>
+          <p style="margin: 16px 0 0; color: #6b7280; font-size: 12px">
+            This will refresh the app with the latest version.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // Fatal-error diagnostic overlay.
+      // Registered before /src/main.ts so it sees module-init failures (e.g.
+      // a library mutating Object.prototype under freezePrototype, throwing
+      // "Attempted to assign to readonly property"). On error, renders a
+      // visible block with message + file + line + col + stack + UA so a
+      // production white-screen becomes diagnosable. Written in vanilla ES5
+      // so it never fails itself on older WebView features.
+      (function () {
+        var SHOWN = false;
+        // Skip the overlay when an error clearly came from the WebDriver
+        // test harness rather than the app itself. tauri-webdriver issues
+        // `execute/sync` calls during DOM rebuilds; if the targeted
+        // element vanished mid-call WebDriverIO throws "stale element
+        // reference" which bubbles into the page as an unhandledrejection,
+        // hitting this overlay and blocking the next test interaction (the
+        // overlay has z-index:max; the button under it becomes "not
+        // clickable" forever). These messages never occur outside a
+        // webdriver session, so filtering on the literal string is safe
+        // for production diagnostics.
+        function isTestHarnessNoise(message) {
+          if (!message) return false;
+          var msg = String(message);
+          return (
+            /stale element reference/i.test(msg) ||
+            /WebDriverError/i.test(msg) ||
+            /element click intercepted/i.test(msg) ||
+            /no such element/i.test(msg)
+          );
+        }
+        // CSP violations whose source or blocked URI is a browser
+        // extension (password managers, privacy tools) are outside the
+        // app's control and don't reflect a fault in our own scripts —
+        // many extensions inject code that calls eval(), which our
+        // script-src blocks. Surfacing those as a fatal overlay hides
+        // the working app behind a scary panel. Ignore them; the
+        // console.error above still records them for support.
+        function isExtensionViolation(e) {
+          if (!e) return false;
+          // Match extension / browser-internal schemes ANYWHERE in the source or
+          // blocked URI — not anchored. Firefox may report the source as a bare
+          // "moz-extension" or a full "moz-extension://…/inject.js" URL; both,
+          // plus chrome:/resource: internals, should be ignored.
+          var re =
+            /(moz-extension|chrome-extension|safari-web-extension|safari-extension|webkit-masked-url|chrome:|resource:)/i;
+          return re.test(String(e.sourceFile || '')) || re.test(String(e.blockedURI || ''));
+        }
+        // A CSP violation we should NOT turn into a fatal overlay because it
+        // wasn't caused by our own bundle — blanking the app behind a scary panel
+        // is wrong. This relaxes how aggressively the overlay reacts WITHOUT
+        // weakening the policy itself: eval stays blocked, extensions/injected
+        // scripts just stop nuking the UI. (A user on Firefox saw an extension's
+        // blocked eval flash-and-blank the sign-in screen.)
+        function isIgnorableCspViolation(e) {
+          if (!e) return true;
+          if (isExtensionViolation(e)) return true;
+          var blocked = String(e.blockedURI || '').toLowerCase();
+          // Our CSP intentionally blocks eval (only wasm-unsafe-eval is allowed)
+          // and the app never calls eval, so an eval violation is always from a
+          // browser extension or injected script, never our code.
+          if (blocked === 'eval' || blocked === 'wasm-eval') return true;
+          // A source on a different origin than ours is injected/foreign code.
+          // Same-origin scripts and inline violations (which report our own
+          // document URL) still surface, so genuine app faults stay visible.
+          var src = String(e.sourceFile || '');
+          if (src.indexOf('://') !== -1) {
+            try {
+              if (location.origin && src.indexOf(location.origin) !== 0) return true;
+            } catch (_) {}
+          }
+          return false;
+        }
+        function showFatal(detail) {
+          if (isTestHarnessNoise(detail)) return;
+          if (SHOWN) {
+            // Append subsequent errors so we capture cascades
+            var prev = document.getElementById('fe-fatal-error');
+            if (prev) {
+              prev.textContent += '\n\n' + detail;
+              return;
+            }
+          }
+          SHOWN = true;
+          var d = document.createElement('div');
+          d.id = 'fe-fatal-error';
+          d.style.cssText = [
+            'position:fixed',
+            'inset:0',
+            'z-index:2147483647',
+            'background:#1a1a1a',
+            'color:#f5f5f5',
+            'font:12px/1.45 ui-monospace,Menlo,Consolas,monospace',
+            'padding:16px 18px',
+            'overflow:auto',
+            'white-space:pre-wrap',
+            'word-break:break-word',
+          ].join(';');
+          d.textContent = detail;
+          (document.body || document.documentElement).appendChild(d);
+        }
+        function describe(label, err) {
+          var lines = [];
+          lines.push('Fatal: app failed to load (' + label + ')');
+          lines.push('');
+          lines.push('UA: ' + navigator.userAgent);
+          lines.push('URL: ' + location.href);
+          lines.push('Time: ' + new Date().toISOString());
+          lines.push('');
+          var name = (err && err.name) || 'Error';
+          var msg =
+            (err && (err.message || err.reason || (err.toString && err.toString()))) || String(err);
+          lines.push('Type: ' + name);
+          lines.push('Message: ' + msg);
+          if (err && err.fileName) lines.push('File: ' + err.fileName);
+          if (err && err.lineNumber != null) lines.push('Line: ' + err.lineNumber);
+          if (err && err.columnNumber != null) lines.push('Col: ' + err.columnNumber);
+          if (err && err.stack) {
+            lines.push('');
+            lines.push('Stack:');
+            lines.push(String(err.stack));
+          }
+          return lines.join('\n');
+        }
+        window.addEventListener(
+          'error',
+          function (event) {
+            // Resource-load errors (script/link 404) are handled by the
+            // chunk-recovery handler below — ignore them here.
+            var t = event.target;
+            if (t && t !== window && t.tagName) return;
+            var err = event.error;
+            if (!err) {
+              err = {
+                name: 'Error',
+                message: event.message || 'unknown error',
+                fileName: event.filename,
+                lineNumber: event.lineno,
+                columnNumber: event.colno,
+              };
+            }
+            try {
+              console.error('[fe-fatal]', err, event);
+            } catch (_) {}
+            showFatal(describe('error', err));
+          },
+          true,
+        );
+        window.addEventListener('unhandledrejection', function (event) {
+          var reason = event.reason || { message: 'unhandled rejection' };
+          // Skip chunk-load rejections — chunk-recovery handler handles them
+          var msg = (reason && reason.message) || '';
+          if (
+            /Failed to fetch dynamically imported module|Loading chunk|error loading dynamically imported module/i.test(
+              msg,
+            )
+          ) {
+            return;
+          }
+          try {
+            console.error('[fe-fatal][unhandledrejection]', reason);
+          } catch (_) {}
+          showFatal(describe('unhandledrejection', reason));
+        });
+        // Also surface CSP violations (these don't go through the 'error'
+        // event — they fire securitypolicyviolation). A blocked module
+        // can manifest indirectly as a readonly-assignment further down.
+        document.addEventListener('securitypolicyviolation', function (e) {
+          try {
+            console.error('[fe-fatal][csp]', e);
+          } catch (_) {}
+          if (isIgnorableCspViolation(e)) return;
+          var detail = [
+            'CSP violation',
+            'directive: ' + e.violatedDirective,
+            'effective: ' + e.effectiveDirective,
+            'blockedURI: ' + e.blockedURI,
+            'sourceFile: ' + e.sourceFile + ':' + e.lineNumber + ':' + e.columnNumber,
+            'sample: ' + (e.sample || ''),
+          ].join('\n');
+          showFatal(detail);
+        });
+      })();
+
+      // Automatic chunk load error recovery.
+      // When a deploy changes chunk hashes, the browser may have a cached
+      // index.html that references old chunk filenames which now 404.
+      // This handler detects those failures, clears only the service worker
+      // and asset caches (preserving localStorage, IndexedDB, and auth),
+      // and reloads once.  A sessionStorage flag prevents infinite loops.
+      (function () {
+        var RECOVERY_KEY = '__fe_chunk_recovery';
+        var alreadyRecovering = false;
+
+        function clearAssetCachesAndReload() {
+          if (alreadyRecovering) return;
+          alreadyRecovering = true;
+
+          // Guard: if we already tried recovery this session, don't loop.
+          // Instead, fall through to the manual fallback UI.
+          if (sessionStorage.getItem(RECOVERY_KEY)) {
+            console.warn('[Recovery] Auto-recovery already attempted; showing fallback UI');
+            var fb = document.getElementById('fe-fallback-recovery');
+            if (fb) fb.style.display = 'block';
+            return;
+          }
+
+          // Mark that we're attempting recovery
+          sessionStorage.setItem(RECOVERY_KEY, Date.now().toString());
+          console.warn('[Recovery] Stale chunk detected — clearing asset caches and reloading');
+
+          Promise.resolve()
+            .then(function () {
+              // Unregister service workers so they don't serve stale assets
+              if ('serviceWorker' in navigator) {
+                return navigator.serviceWorker.getRegistrations().then(function (regs) {
+                  return Promise.all(
+                    regs.map(function (r) {
+                      return r.unregister();
+                    }),
+                  );
+                });
+              }
+            })
+            .then(function () {
+              // Clear all Cache Storage (static assets only — not localStorage or IndexedDB)
+              if ('caches' in window) {
+                return caches.keys().then(function (names) {
+                  return Promise.all(
+                    names.map(function (n) {
+                      return caches.delete(n);
+                    }),
+                  );
+                });
+              }
+            })
+            .then(function () {
+              // Short delay lets iOS finish SW teardown before reload
+              return new Promise(function (r) {
+                setTimeout(r, 300);
+              });
+            })
+            .then(function () {
+              // Cache-busting param bypasses any lingering SW fetch handler
+              window.location.href = window.location.pathname + '?_cb=' + Date.now();
+            })
+            .catch(function () {
+              window.location.href = window.location.pathname + '?_cb=' + Date.now();
+            });
+        }
+
+        // Listen for script/link load errors (chunk 404s fire as error events
+        // on the <script> or <link> element, and bubble to window in capture phase)
+        window.addEventListener(
+          'error',
+          function (event) {
+            var target = event.target || event.srcElement;
+            if (!target || !target.tagName) return;
+            var tag = target.tagName.toLowerCase();
+            // Only handle script/link load failures (not runtime JS errors)
+            if ((tag === 'script' && target.src) || (tag === 'link' && target.href)) {
+              var url = target.src || target.href || '';
+              // Only recover for chunk/asset files, not arbitrary resources
+              if (/\.(js|css)(\?|$)/.test(url)) {
+                console.error('[Recovery] Failed to load asset:', url);
+                clearAssetCachesAndReload();
+              }
+            }
+          },
+          true,
+        ); // capture phase to catch before the error is swallowed
+
+        // Also catch dynamic import() failures (Vite code-split chunks)
+        window.addEventListener('unhandledrejection', function (event) {
+          var reason = event.reason;
+          if (
+            reason &&
+            ((reason.message &&
+              (/Failed to fetch dynamically imported module/.test(reason.message) ||
+                /Loading chunk/.test(reason.message) ||
+                /error loading dynamically imported module/i.test(reason.message))) ||
+              reason.name === 'ChunkLoadError')
+          ) {
+            console.error('[Recovery] Dynamic import failed:', reason.message || reason);
+            event.preventDefault();
+            clearAssetCachesAndReload();
+          }
+        });
+
+        // Clear the recovery flag once the app bootstraps successfully,
+        // so the next deploy can trigger auto-recovery again.
+        var origMark = window.__markAppBootstrapped;
+        window.__markAppBootstrapped = function () {
+          sessionStorage.removeItem(RECOVERY_KEY);
+          if (typeof origMark === 'function') origMark();
+        };
+      })();
+
+      // Show fallback UI if main script fails to load/execute within 15 seconds
+      (function () {
+        var timeout = setTimeout(function () {
+          var fallback = document.getElementById('fe-fallback-recovery');
+          if (fallback && !window.__appBootstrapped) {
+            fallback.style.display = 'block';
+          }
+        }, 15000);
+
+        // Clear timeout once app bootstraps successfully
+        var origMark2 = window.__markAppBootstrapped;
+        window.__markAppBootstrapped = function () {
+          clearTimeout(timeout);
+          window.__appBootstrapped = true;
+          if (typeof origMark2 === 'function') origMark2();
+        };
+
+        // Handle fallback button click (manual recovery)
+        document.getElementById('fe-fallback-clear-btn').addEventListener('click', function () {
+          this.disabled = true;
+          this.textContent = 'Clearing...';
+
+          // Clear the recovery guard so auto-recovery works after manual clear
+          sessionStorage.removeItem('__fe_chunk_recovery');
+
+          Promise.resolve()
+            .then(function () {
+              if ('serviceWorker' in navigator) {
+                return navigator.serviceWorker.getRegistrations().then(function (regs) {
+                  return Promise.all(
+                    regs.map(function (r) {
+                      return r.unregister();
+                    }),
+                  );
+                });
+              }
+            })
+            .then(function () {
+              if ('caches' in window) {
+                return caches.keys().then(function (names) {
+                  return Promise.all(
+                    names.map(function (n) {
+                      return caches.delete(n);
+                    }),
+                  );
+                });
+              }
+            })
+            .then(function () {
+              // Short delay lets iOS finish SW teardown before reload
+              return new Promise(function (r) {
+                setTimeout(r, 500);
+              });
+            })
+            .then(function () {
+              // Cache-busting param bypasses any lingering SW fetch handler
+              window.location.href = window.location.pathname + '?_cb=' + Date.now();
+            })
+            .catch(function () {
+              window.location.href = window.location.pathname + '?_cb=' + Date.now();
+            });
+        });
+      })();
+    </script>
+
+  </body>
+</html>
