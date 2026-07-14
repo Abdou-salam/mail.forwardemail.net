@@ -34,3 +34,4 @@ src-tauri/gen/
 *.nsis.zip
 
 forwardemail.jks
+.vscode/

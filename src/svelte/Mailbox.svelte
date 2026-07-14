@@ -67,6 +67,9 @@
   import { getSyncSettings } from '../utils/sync-settings.js';
   import { parseMailto, mailtoToPrefill } from '../utils/mailto';
   import MailtoPrompt from './components/MailtoPrompt.svelte';
+  import ThemeStyleToggle from './components/ThemeStyleToggle.svelte';
+  import OfficeDashboard from './components/OfficeDashboard.svelte';
+  import { uiStyle } from '../stores/themeStyleStore';
   import { isTauriMobile } from '../utils/platform.js';
   import { openExternalUrl } from '../utils/external-links.js';
   import { onBackButton, triggerHaptic } from '../utils/tauri-bridge.js';
@@ -532,6 +535,10 @@
     cardView = !cardView;
     localStorage.setItem('fe:card-view', String(cardView));
   }
+  // CUSTOM:theme-toggle — sync card layout with the modern/classic theme switch
+  $effect(() => {
+    cardView = $uiStyle === 'modern';
+  });
   let searchActiveStore = storeToStore(source.state?.searchActive, false);
   let searchingStore = storeToStore(source.state?.searching, false);
   let filteredConversations = storeToStore(source.state?.filteredConversations, []);
@@ -5649,6 +5656,8 @@
                 {/if}
               </div>
             {/if}
+            <!-- CUSTOM:theme-toggle -->
+            <ThemeStyleToggle />
             <div class="inline-flex items-center gap-2.5">
               <button
                 class="inline-flex items-center justify-center p-1.5 hover:bg-accent transition-colors"

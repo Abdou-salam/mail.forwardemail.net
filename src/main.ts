@@ -39,6 +39,7 @@ import './styles/tokens.css';
 import './styles/components/index.css';
 import './styles/pages/index.css';
 import './styles/main.css';
+import './styles/theme-modern.css';
 
 // Initialize error logger for feedback system
 import './utils/error-logger';
