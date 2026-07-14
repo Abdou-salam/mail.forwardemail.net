@@ -69,6 +69,7 @@
   import MailtoPrompt from './components/MailtoPrompt.svelte';
   import ThemeStyleToggle from './components/ThemeStyleToggle.svelte';
   import OfficeDashboard from './components/OfficeDashboard.svelte';
+  import ModernSidebarExtras from './components/ModernSidebarExtras.svelte';
   import { uiStyle } from '../stores/themeStyleStore';
   import { isTauriMobile } from '../utils/platform.js';
   import { openExternalUrl } from '../utils/external-links.js';
@@ -5899,10 +5900,17 @@
                   </button>
                 </li>
               </ul>
+              {#if $uiStyle === 'modern'}
+          <ModernSidebarExtras />
+        {/if}
+        </div> <div 
+            class="p-4 border-t border-border" 
+            class:fe-sidebar-footer-modern={$uiStyle === 'modern'}
+          >
             </div>
 
             <!-- Collapsible sidebar bottom -->
-            <div class="mt-auto p-3 border-t border-border">
+            <div class="mt-auto p-3 border-t border-border" class:fe-modern-bottom={$uiStyle === 'modern'}>
               <button
                 type="button"
                 class="flex items-center justify-between gap-2 w-full px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"

@@ -99,3 +99,186 @@ body[data-ui-style='modern'] .fe-office-card:hover {
   transform: translateY(-4px);
   box-shadow: 0 20px 40px rgba(20, 20, 60, 0.13);
 }
+/* Customisation moderne du Bouton Nouveau Message (conforme maquette) */
+body[data-ui-style='modern'] [data-testid="compose-button"] {
+  border-radius: 999px !important;
+  background: linear-gradient(135deg, #000091, #3434d5) !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 145, 0.2) !important;
+  font-weight: 600 !important;
+  color: #ffffff !important;
+  border: none !important;
+}
+
+/* Customisation de l'état actif des dossiers réels du haut */
+body[data-ui-style='modern'] [data-testid="folder-item"] .text-primary {
+  background-color: #e7e7fd !important; /* var(--active-bg) */
+  color: #000091 !important; /* var(--blue) */
+  border-radius: 8px !important;
+  font-weight: 700 !important;
+}
+/* ==========================================================================
+   MODERNISATION DE LA SECTION UTILISATEUR (BAS DE SIDEBAR)
+   ========================================================================== */
+
+/* Conteneur global tout en bas */
+body[data-ui-style='modern'] .fe-sidebar-footer-modern {
+  background-color: transparent !important;
+  border-top: 1px solid #f2f3f9 !important; /* Ligne fine et moderne */
+  padding: 12px 16px !important;
+}
+
+/* Transformation du bouton utilisateur en carte flottante élégante */
+body[data-ui-style='modern'] .fe-sidebar-footer-modern button {
+  background-color: #f8fafc !important; /* Gris ultra clair */
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 12px !important; /* Coins bien arrondis */
+  padding: 10px 14px !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+  width: 100% !important;
+  transition: all 0.2s ease-in-out !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02) !important;
+}
+
+/* Effet de survol sur la carte utilisateur */
+body[data-ui-style='modern'] .fe-sidebar-footer-modern button:hover {
+  background-color: #f1f5f9 !important;
+  border-color: #cbd5e1 !important;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05) !important;
+}
+
+/* Alignement du texte utilisateur (Inter, foncé et élégant) */
+body[data-ui-style='modern'] .fe-sidebar-footer-modern button span {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+  font-weight: 600 !important;
+  color: #1e293b !important; /* Anthracite moderne */
+  font-size: 13.5px !important;
+}
+
+/* Icône ou avatar */
+body[data-ui-style='modern'] .fe-sidebar-footer-modern button svg,
+body[data-ui-style='modern'] .fe-sidebar-footer-modern button .avatar {
+  color: #000091 !important; /* Bleu royal */
+}
+/* ==========================================================================
+   MODERNISATION DE LA SECTION "MORE" (BAS DE SIDEBAR)
+   ========================================================================== */
+
+/* Conteneur global */
+body[data-ui-style='modern'] .fe-modern-bottom {
+  background-color: transparent !important;
+  border-top: 1px solid #f2f3f9 !important; /* Ligne de séparation très subtile */
+  padding: 12px 16px !important;
+}
+
+/* Bouton principal "More" */
+body[data-ui-style='modern'] .fe-modern-bottom > button {
+  background: transparent !important;
+  border-radius: 8px !important;
+  padding: 8px 12px !important;
+  color: #626279 !important; /* Même couleur que les éléments de dossiers */
+  font-family: 'Inter', sans-serif !important;
+  font-weight: 500 !important;
+  transition: all 0.15s ease-in-out !important;
+}
+
+body[data-ui-style='modern'] .fe-modern-bottom > button:hover {
+  background-color: #f2f3f9 !important; /* Gris/bleu doux de la maquette */
+  color: #000091 !important; /* Bleu France au survol */
+}
+
+/* Flèche et icône principale de "More" */
+body[data-ui-style='modern'] .fe-modern-bottom > button svg {
+  color: #9c9cb0 !important;
+  transition: color 0.15s ease !important;
+}
+
+body[data-ui-style='modern'] .fe-modern-bottom > button:hover svg {
+  color: #000091 !important;
+}
+
+/* Liste d'outils dépliée (New folder, Contacts, etc.) */
+body[data-ui-style='modern'] .fe-modern-bottom .flex-col {
+  gap: 2px !important; /* Espacement serré et élégant comme la liste des dossiers */
+  margin-top: 6px !important;
+}
+
+/* Chaque bouton d'outil individuel (Contacts, Calendar, etc.) */
+body[data-ui-style='modern'] .fe-modern-bottom .flex-col button {
+  background: transparent !important;
+  border-radius: 8px !important; /* Bords arrondis modernes */
+  padding: 8px 12px !important; /* Espacement interne harmonieux */
+  height: 38px !important; /* Alignement de la hauteur avec les autres listes */
+  font-family: 'Inter', sans-serif !important;
+  font-weight: 500 !important;
+  color: #626279 !important;
+  display: flex !important;
+  align-items: center !important;
+  transition: all 0.15s ease-in-out !important;
+}
+
+/* Effet au survol (hover) des outils individuels : RECTANGLE ARRONDIS MODERNE */
+body[data-ui-style='modern'] .fe-modern-bottom .flex-col button:hover {
+  background-color: #f2f3f9 !important; /* Fond moderne */
+  color: #000091 !important; /* Texte bleu France */
+}
+
+/* Icônes à l'intérieur des outils */
+body[data-ui-style='modern'] .fe-modern-bottom .flex-col button svg {
+  color: #9898ae !important; /* Teinte grise discrète par défaut */
+  margin-right: 4px !important;
+  transition: color 0.15s ease !important;
+}
+
+body[data-ui-style='modern'] .fe-modern-bottom .flex-col button:hover svg {
+  color: #000091 !important; /* Icône qui s'illumine en bleu au survol */
+}
+/* ==========================================================================
+   ARRONDIS SUR LES DOSSIERS NATIFS (BROUILLONS, ENVOYÉ, ETC.)
+   ========================================================================== */
+
+/* Conteneur de l'item de liste (li) */
+body[data-ui-style='modern'] [data-testid="folder-item"],
+body[data-ui-style='modern'] [data-testid="folder-list"] li {
+  border-radius: 8px !important;
+  overflow: hidden !important; /* Force le bouton enfant à respecter l'arrondi */
+  margin-bottom: 2px !important; /* Petit espacement entre les dossiers */
+}
+
+/* Le bouton à l'intérieur de l'item (actif et survol) */
+body[data-ui-style='modern'] [data-testid="folder-item"] button,
+body[data-ui-style='modern'] [data-testid="folder-list"] li button {
+  border-radius: 8px !important;
+  transition: all 0.15s ease-in-out !important;
+}
+
+/* État survol (hover) */
+body[data-ui-style='modern'] [data-testid="folder-item"] button:hover,
+body[data-ui-style='modern'] [data-testid="folder-list"] li button:hover {
+  background-color: #f2f3f9 !important; /* Gris/bleu très doux */
+  color: #000091 !important; /* Texte en bleu France */
+}
+
+/* Ajustement de l'icône au survol */
+body[data-ui-style='modern'] [data-testid="folder-item"] button:hover svg,
+body[data-ui-style='modern'] [data-testid="folder-list"] li button:hover svg {
+  color: #000091 !important;
+}
+
+/* État Actif/Sélectionné (comme "Envoyé" ou "Boîte de réception") */
+body[data-ui-style='modern'] [data-testid="folder-item"].bg-accent,
+body[data-ui-style='modern'] [data-testid="folder-list"] li.bg-accent,
+body[data-ui-style='modern'] [data-testid="folder-item"] .text-primary {
+  background-color: #e7e7fd !important; /* Bleu très clair actif */
+  color: #000091 !important;
+  font-weight: 600 !important;
+}
+
+/* Suppression de la bordure d'accent d'origine qui casse l'effet arrondi */
+body[data-ui-style='modern'] [data-testid="folder-item"].ring-1 {
+  --tw-ring-color: transparent !important;
+  ring: none !important;
+  box-shadow: none !important;
+}
