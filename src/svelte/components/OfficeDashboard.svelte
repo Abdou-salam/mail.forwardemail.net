@@ -13,12 +13,48 @@
   let { navigate, onUnavailable = () => {} }: Props = $props();
 
   const services = [
-    { icon: Notes, title: 'Prise de notes', desc: "Prendre des notes en réunion et diffuser les comptes rendus.", path: null, accent: 'blue' },
-    { icon: ChartBar, title: 'Mes statistiques', desc: "Suivre l'usage et l'activité de ma messagerie.", path: '/mailbox/settings', accent: 'green' },
-    { icon: Video, title: 'Visioconférence', desc: 'Organiser et rejoindre mes réunions.', path: null, accent: 'purple' },
-    { icon: MessageCircle, title: 'Tchap', desc: 'Échanger avec mes groupes de travail.', path: null, accent: 'orange' },
-    { icon: ChartDots, title: 'Sondage', desc: "Suivre mes sondages d'organisation.", path: null, accent: 'teal' },
-    { icon: MailShare, title: 'Messagerie partagée', desc: "Vue d'ensemble de mes messageries partagées.", path: '/mailbox/settings#accounts', accent: 'red' },
+    {
+      icon: Notes,
+      title: 'Prise de notes',
+      desc: 'Prendre des notes en réunion et diffuser les comptes rendus.',
+      path: null,
+      accent: 'blue',
+    },
+    {
+      icon: ChartBar,
+      title: 'Mes statistiques',
+      desc: "Suivre l'usage et l'activité de ma messagerie.",
+      path: '/mailbox/settings',
+      accent: 'green',
+    },
+    {
+      icon: Video,
+      title: 'Visioconférence',
+      desc: 'Organiser et rejoindre mes réunions.',
+      path: null,
+      accent: 'purple',
+    },
+    {
+      icon: MessageCircle,
+      title: 'Tchap',
+      desc: 'Échanger avec mes groupes de travail.',
+      path: null,
+      accent: 'orange',
+    },
+    {
+      icon: ChartDots,
+      title: 'Sondage',
+      desc: "Suivre mes sondages d'organisation.",
+      path: null,
+      accent: 'teal',
+    },
+    {
+      icon: MailShare,
+      title: 'Messagerie partagée',
+      desc: "Vue d'ensemble de mes messageries partagées.",
+      path: '/mailbox/settings#accounts',
+      accent: 'red',
+    },
   ];
 
   function open(service: (typeof services)[number]) {
@@ -30,9 +66,7 @@
 <div class="fe-office">
   <div class="fe-office-chip">Espace de travail</div>
   <h1>Mon bureau numérique</h1>
-  <p class="fe-office-sub">
-    Retrouvez vos services essentiels dans un espace unifié et sécurisé.
-  </p>
+  <p class="fe-office-sub">Retrouvez vos services essentiels dans un espace unifié et sécurisé.</p>
   <div class="fe-office-grid">
     {#each services as s}
       <button type="button" class="fe-office-card fe-accent-{s.accent}" onclick={() => open(s)}>

@@ -71,12 +71,24 @@ body[data-ui-style='modern'] .fe-mailbox-shell {
   place-items: center;
   color: #fff;
 }
-.fe-accent-blue .fe-office-icon { background: #000091; }
-.fe-accent-green .fe-office-icon { background: #137c4b; }
-.fe-accent-purple .fe-office-icon { background: #4f3abd; }
-.fe-accent-orange .fe-office-icon { background: #c85c00; }
-.fe-accent-teal .fe-office-icon { background: #007f88; }
-.fe-accent-red .fe-office-icon { background: #a1000b; }
+.fe-accent-blue .fe-office-icon {
+  background: #000091;
+}
+.fe-accent-green .fe-office-icon {
+  background: #137c4b;
+}
+.fe-accent-purple .fe-office-icon {
+  background: #4f3abd;
+}
+.fe-accent-orange .fe-office-icon {
+  background: #c85c00;
+}
+.fe-accent-teal .fe-office-icon {
+  background: #007f88;
+}
+.fe-accent-red .fe-office-icon {
+  background: #a1000b;
+}
 
 body[data-ui-style='modern'] .fe-office-card {
   border-radius: 19px;
