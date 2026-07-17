@@ -5496,29 +5496,29 @@
       {#if $uiStyle === 'modern'}
     <!-- APPEL DE LA BARRE D'OUTILS MODERNE SANS IMPACT EN CAS DE MAJ -->
     <ModernToolbar
-      {toggleSidebar}
-    sidebarOpen={$sidebarOpen}
-    {query}
-    bind:searchInputEl
-    {showSuggestions}
-    {hideSuggestions}
-    {onSearch}
-    {searchingStore}
-    {searchSuggestionsVisible}
-    {filteredSuggestions}
-    {applySuggestion}
-    {isMobile}
-    {showHeaderShortcuts}
-    {syncProgress}
-    {indexProgress}
-    isDarkMode={isDarkMode}
-    {toggleTheme}
-    {isLockEnabled}
-    {isVaultConfigured}
-    {profileImageStore}
-    profileInitials={profileInitials}
-    {navigate}
-    />{:else}
+  {toggleSidebar}
+  sidebarOpen={$sidebarOpen}
+  {query}
+  bind:searchInputEl
+  {showSuggestions}
+  {hideSuggestions}
+  {onSearch}
+  {searchingStore}
+  {searchSuggestionsVisible}
+  {filteredSuggestions}
+  {applySuggestion}
+  {isMobile}
+  {showHeaderShortcuts}
+  {syncProgress}
+  {indexProgress}
+  isDarkMode={isDarkMode}
+  {toggleTheme}
+  {isLockEnabled}
+  {isVaultConfigured}
+  {profileImageStore}
+  profileInitials={profileInitials}
+  {navigate}
+  />{:else}
       <div
         class="flex items-center gap-3 px-4 py-2 bg-muted/50 dark:bg-background"
         style="padding-top: max(0.5rem, env(safe-area-inset-top, 0px))"
