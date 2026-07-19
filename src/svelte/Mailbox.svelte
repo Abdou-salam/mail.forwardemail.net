@@ -5930,7 +5930,7 @@
                 </li>
               </ul>
               {#if $uiStyle === 'modern'}
-          <ModernSidebarExtras />
+          <ModernSidebarExtras bind:folderActionModal={folderActionModal}/>
         {/if}
         </div> <div 
             class="p-4 border-t border-border" 
