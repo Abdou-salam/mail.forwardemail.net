@@ -1,4 +1,5 @@
 import './polyfills';
+import { installDemoMutationsOverlay, setOverlayToasts } from './utils/demo-mutations-overlay';
 import * as mailboxActions from './stores/mailboxActions';
 import { createStarfield } from './utils/starfield';
 import { Local, Accounts, reconcileOrphanedAccountData } from './utils/storage';
@@ -409,6 +410,9 @@ globalThis.addEventListener('fe:lock-app', () => {
 mailboxActions.setToasts(toasts);
 setIndexToasts(toasts);
 setDemoToasts(toasts);
+installDemoMutationsOverlay();
+setOverlayToasts(toasts);
+//setDemoToasts(wrapToastsForDemoUnblock(toasts));
 setNotificationToasts(toasts);
 viewModel.toasts = toasts;
 viewModel.mailboxView.toasts = toasts;
