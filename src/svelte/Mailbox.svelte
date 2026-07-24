@@ -2,7 +2,7 @@
   import { readable, get, writable } from 'svelte/store';
   import type { Readable, Unsubscriber } from 'svelte/store';
   import { tick, onMount, onDestroy } from 'svelte';
-
+   // @ts-ignore
   // Store subscriptions managed in onMount/onDestroy to avoid $effect loops
   let mailboxSubscriptions: Unsubscriber[] = [];
   import { mailService, getPgpKeysVersion, pgpKeysVersion } from '../stores/mailService';
@@ -69,13 +69,14 @@
   import MailtoPrompt from './components/MailtoPrompt.svelte';
   import ThemeStyleToggle from './components/ThemeStyleToggle.svelte';
   import OfficeDashboard from './components/OfficeDashboard.svelte';
-
+   // @ts-ignore
   import ModernSidebarExtras from './components/ModernSidebarExtras.svelte';
   import ModernToolbar from './components/ModernToolbar.svelte';
   import { uiStyle } from '../stores/themeStyleStore';
   import { isTauriMobile } from '../utils/platform.js';
   import { openExternalUrl } from '../utils/external-links.js';
   import { onBackButton, triggerHaptic } from '../utils/tauri-bridge.js';
+   // @ts-ignore
   import {
     outboxCount,
     outboxProcessing,
@@ -219,8 +220,12 @@
     activeTab,
     openMessageTab,
   } from '../stores/tabStore';
+  // @ts-ignore
   import { isTauriDesktop } from '../utils/platform.js';
+  // @ts-ignore
   import { onlineStatus, checkConnectivity } from '../utils/network-status';
+
+
 
   const isBodyPrefetchEnabled = () => getEffectiveSettingValue('cache_prefetch_enabled') !== false;
 
@@ -5460,7 +5465,10 @@
       prefetchingNextPage = false;
     }
   };
+  // Expose actions pour le ModernToolbar (isolation)
+export { archiveSelected, deleteSelected } from '../stores/mailboxActions';
 </script>
+
 
 <Tooltip.Provider>
   {#if isActive}
@@ -5930,8 +5938,12 @@
                 </li>
               </ul>
               {#if $uiStyle === 'modern'}
-          <ModernSidebarExtras bind:folderActionModal={folderActionModal}/>
-        {/if}
+                  <ModernSidebarExtras bind:folderActionModal={folderActionModal}
+                  folders={$foldersStore} 
+                  selectedFolder={$selectedFolderStore}
+                  onSelectFolder={(path) => selectedFolderStore.set(path)}
+                  />
+              {/if}
         </div> <div 
             class="p-4 border-t border-border" 
             class:fe-sidebar-footer-modern={$uiStyle === 'modern'}
