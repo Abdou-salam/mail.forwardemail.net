@@ -651,3 +651,73 @@ body[data-ui-style='modern'] input[type="search"] {
 body[data-ui-style='modern'] input[type="search"]:focus {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 16%, transparent);
 }
+/* ============================================
+   MAILBOX — Dialogs, menus et sélecteur de compte
+   ============================================ */
+
+/* Boîte de confirmation (Delete/Archive/etc.) */
+body[data-ui-style='modern'] [data-testid="confirm-dialog"] {
+  border-radius: 20px;
+  box-shadow: 0 24px 60px rgba(20, 20, 60, 0.2);
+  backdrop-filter: blur(16px) saturate(160%);
+  background: color-mix(in srgb, var(--surface-default) 96%, transparent);
+}
+body[data-ui-style='modern'] [data-testid="confirm-dialog-cancel"] {
+  border-radius: 999px;
+  transition: background-color 0.15s ease;
+}
+body[data-ui-style='modern'] [data-testid="confirm-dialog-confirm"] {
+  border-radius: 999px;
+  box-shadow: 0 8px 20px rgba(0, 0, 145, 0.22);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+body[data-ui-style='modern'] [data-testid="confirm-dialog-confirm"]:hover {
+  transform: translateY(-1px);
+}
+
+/* Menu "Apply label" */
+body[data-ui-style='modern'] [data-labels-dropdown] {
+  border-radius: 14px;
+  box-shadow: 0 12px 32px rgba(20, 20, 60, 0.15);
+  backdrop-filter: blur(12px) saturate(160%);
+  background: color-mix(in srgb, var(--surface-default) 96%, transparent);
+}
+body[data-ui-style='modern'] [data-labels-dropdown] button {
+  border-radius: 9px;
+  margin: 1px 4px;
+  width: calc(100% - 8px);
+}
+
+/* Modale "New label" (shadcn Dialog — data-slot déjà couvert par les règles Contacts) */
+body[data-ui-style='modern'] .label-color-swatch {
+  border-radius: 10px;
+  transition: transform 0.15s ease;
+}
+body[data-ui-style='modern'] .label-color-swatch:hover {
+  transform: scale(1.08);
+}
+body[data-ui-style='modern'] .label-color-input {
+  border-radius: 10px;
+}
+
+/* Sélecteur de compte (menu déroulant sous l'adresse email) */
+body[data-ui-style='modern'] .bg-popover {
+  border-radius: 14px;
+  box-shadow: 0 12px 32px rgba(20, 20, 60, 0.15);
+  backdrop-filter: blur(12px) saturate(160%);
+  background: color-mix(in srgb, var(--surface-default) 96%, transparent);
+}
+body[data-ui-style='modern'] .bg-popover button {
+  border-radius: 9px;
+  margin: 1px 4px;
+  width: calc(100% - 8px);
+}
+/* Bouton sélecteur de compte (trigger, pas juste le menu déroulant) */
+body[data-ui-style='modern'] button.bg-muted\/50 {
+  border-radius: 999px;
+  border-color: color-mix(in srgb, var(--border) 70%, transparent);
+  transition: background-color 0.15s ease, box-shadow 0.15s ease;
+}
+body[data-ui-style='modern'] button.bg-muted\/50:hover {
+  box-shadow: 0 2px 8px rgba(20, 20, 60, 0.06);
+}
