@@ -532,3 +532,122 @@ html.dark .fe-modern-useremail,
 body.dark .fe-modern-useremail {
   color: #a1a1aa !important;
 }
+/* ============================================
+   CONTACTS — habillage moderne
+   ============================================ */
+
+/* Liste de contacts : cards flottantes */
+body[data-ui-style='modern'] [data-testid="contact-item"] {
+  border-radius: 14px;
+  margin: 2px 6px;
+  transition: background-color 0.18s ease, transform 0.12s ease;
+}
+body[data-ui-style='modern'] [data-testid="contact-item"]:hover {
+  background: color-mix(in srgb, var(--primary) 6%, transparent);
+  transform: translateX(2px);
+}
+body[data-ui-style='modern'] [data-testid="contact-item"] .rounded-full {
+  box-shadow: 0 0 0 3px var(--surface-default), 0 4px 10px rgba(20, 20, 60, 0.12);
+}
+
+/* Panneau détail — conteneur centré autour du formulaire */
+body[data-ui-style='modern'] .mx-auto.max-w-2xl {
+  background: color-mix(in srgb, var(--surface-default) 92%, transparent);
+  backdrop-filter: blur(16px) saturate(160%);
+  border-radius: 20px;
+  padding: 28px;
+  box-shadow: 0 12px 32px rgba(20, 20, 60, 0.07);
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+/* Champs Name / Email / Phone / Notes — ciblés par id, stables */
+body[data-ui-style='modern'] #contact-name,
+body[data-ui-style='modern'] #contact-email,
+body[data-ui-style='modern'] #contact-phone,
+body[data-ui-style='modern'] #contact-notes,
+body[data-ui-style='modern'] #contact-company,
+body[data-ui-style='modern'] #contact-job,
+body[data-ui-style='modern'] #contact-birthday {
+  border-radius: 12px;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+body[data-ui-style='modern'] #contact-name:focus,
+body[data-ui-style='modern'] #contact-email:focus,
+body[data-ui-style='modern'] #contact-phone:focus,
+body[data-ui-style='modern'] #contact-notes:focus {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 16%, transparent);
+}
+
+/* Avatar dans le panneau détail (le grand rond en haut) */
+body[data-ui-style='modern'] label[for="contact-photo-upload"] {
+  box-shadow: 0 0 0 4px var(--surface-default), 0 6px 16px rgba(20, 20, 60, 0.15);
+}
+
+/* Bouton primaire partagé (Compose, New Contact, etc.) */
+body[data-ui-style='modern'] button.bg-primary:not([data-testid]) {
+  border-radius: 999px;
+  box-shadow: 0 8px 20px rgba(0, 0, 145, 0.22);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+body[data-ui-style='modern'] button.bg-primary:not([data-testid]):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 28px rgba(0, 0, 145, 0.28);
+}
+/* ============================================
+   CONTACTS — Additional info + Menu + Modale
+   ============================================ */
+
+/* Champs "Additional info" */
+body[data-ui-style='modern'] #contact-company,
+body[data-ui-style='modern'] #contact-job,
+body[data-ui-style='modern'] #contact-timezone,
+body[data-ui-style='modern'] #contact-website,
+body[data-ui-style='modern'] #contact-birthday,
+body[data-ui-style='modern'] #contact-address {
+  border-radius: 12px;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+body[data-ui-style='modern'] #contact-company:focus,
+body[data-ui-style='modern'] #contact-job:focus,
+body[data-ui-style='modern'] #contact-timezone:focus,
+body[data-ui-style='modern'] #contact-website:focus,
+body[data-ui-style='modern'] #contact-birthday:focus,
+body[data-ui-style='modern'] #contact-address:focus {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 16%, transparent);
+}
+
+/* Menu déroulant ⋯ (shadcn-svelte / bits-ui) */
+body[data-ui-style='modern'] [data-slot="dropdown-menu-content"] {
+  border-radius: 14px;
+  box-shadow: 0 12px 32px rgba(20, 20, 60, 0.15);
+  backdrop-filter: blur(12px) saturate(160%);
+  background: color-mix(in srgb, var(--surface-default) 96%, transparent);
+}
+body[data-ui-style='modern'] [data-slot="dropdown-menu-item"] {
+  border-radius: 9px;
+  margin: 1px 4px;
+}
+
+/* Modale "New/Edit contact" (shadcn-svelte Dialog) */
+body[data-ui-style='modern'] [data-slot="dialog-content"] {
+  border-radius: 20px;
+  box-shadow: 0 24px 60px rgba(20, 20, 60, 0.2);
+  backdrop-filter: blur(16px) saturate(160%);
+}
+body[data-ui-style='modern'] [data-slot="dialog-content"] input,
+body[data-ui-style='modern'] [data-slot="dialog-content"] textarea {
+  border-radius: 12px;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+body[data-ui-style='modern'] [data-slot="dialog-content"] input:focus,
+body[data-ui-style='modern'] [data-slot="dialog-content"] textarea:focus {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 16%, transparent);
+}
+/* Barre de recherche de contacts */
+body[data-ui-style='modern'] input[type="search"] {
+  border-radius: 999px;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+body[data-ui-style='modern'] input[type="search"]:focus {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 16%, transparent);
+}
