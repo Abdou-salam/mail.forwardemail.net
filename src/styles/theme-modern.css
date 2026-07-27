@@ -1,7 +1,9 @@
 body[data-ui-style='modern'] {
-  --radius-lg: 19px;
+ --radius-lg: 19px;
   --radius-xl: 21px;
   --shadow-lg: 0 20px 40px rgba(20, 20, 60, 0.13);
+  --hover-bg: color-mix(in oklch, var(--primary) 12%, transparent);
+  --hover-bg-strong: color-mix(in oklch, var(--primary) 16%, transparent);
 }
 
 body[data-ui-style='modern'] .fe-folders,
@@ -143,12 +145,11 @@ body[data-ui-style='modern'] .fe-sidebar-footer-modern button {
 
 /* Effet de survol sur la carte utilisateur */
 body[data-ui-style='modern'] .fe-sidebar-footer-modern button:hover {
-  background-color: #f1f5f9 !important;
-  border-color: #cbd5e1 !important;
+  background-color: var(--hover-bg) !important;
+  border-color: color-mix(in oklch, var(--primary) 30%, transparent) !important;
   transform: translateY(-1px);
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05) !important;
 }
-
 /* Alignement du texte utilisateur (Inter, foncé et élégant) */
 body[data-ui-style='modern'] .fe-sidebar-footer-modern button span {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
@@ -185,8 +186,8 @@ body[data-ui-style='modern'] .fe-modern-bottom > button {
 }
 
 body[data-ui-style='modern'] .fe-modern-bottom > button:hover {
-  background-color: #f2f3f9 !important; /* Gris/bleu doux de la maquette */
-  color: #000091 !important; /* Bleu France au survol */
+ background-color: var(--hover-bg) !important;
+color: var(--primary) !important;
 }
 
 /* Flèche et icône principale de "More" */
@@ -221,8 +222,8 @@ body[data-ui-style='modern'] .fe-modern-bottom .flex-col button {
 
 /* Effet au survol (hover) des outils individuels : RECTANGLE ARRONDIS MODERNE */
 body[data-ui-style='modern'] .fe-modern-bottom .flex-col button:hover {
-  background-color: #f2f3f9 !important; /* Fond moderne */
-  color: #000091 !important; /* Texte bleu France */
+  background-color: var(--hover-bg) !important;
+color: var(--primary) !important;
 }
 
 /* Icônes à l'intérieur des outils */
@@ -432,8 +433,9 @@ body.dark .fe-modern-toolbar-container {
   transition: all 0.15s ease;
 }
 .fe-modern-shortcuts button:hover {
-  background-color: #f1f5f9;
-  color: #000091;
+  background-color: var(--hover-bg);
+  color: var(--primary);
+  border-radius: 10px;
 }
 .dark .fe-modern-shortcuts button,
 [data-theme='dark'] .fe-modern-shortcuts button {
@@ -483,8 +485,8 @@ body.dark .fe-modern-user-profile-btn {
   border-color: #3f3f46 !important;     /* zinc-700 */
 }
 .fe-modern-user-profile-btn:hover {
-  background-color: #f1f5f9 !important;
-  border-color: #cbd5e1 !important;
+  background-color: var(--hover-bg) !important;
+  border-color: color-mix(in oklch, var(--primary) 30%, transparent) !important;
   transform: translateY(-1px);
 }
 .dark .fe-modern-user-profile-btn:hover,
@@ -720,4 +722,38 @@ body[data-ui-style='modern'] button.bg-muted\/50 {
 }
 body[data-ui-style='modern'] button.bg-muted\/50:hover {
   box-shadow: 0 2px 8px rgba(20, 20, 60, 0.06);
+}
+/* ============================================
+   SURVOL UNIFIÉ — toolbar, boutons et lignes de messages
+   Teinte alignée sur --primary (format oklch réel du
+   projet), via color-mix pour gérer la transparence.
+   ============================================ */
+
+/* Lignes de messages — Classique : neutre discret */
+[data-testid="message-row"] {
+  transition: background-color 0.15s ease;
+}
+[data-testid="message-row"]:hover {
+  background-color: var(--accent, rgba(0, 0, 0, 0.04));
+}
+
+/* Lignes de messages — Moderne : teinte primary */
+body[data-ui-style='modern'] .fe-msg-row:hover {
+  background: color-mix(in oklch, var(--primary) 12%, transparent) !important;
+  border-radius: 10px;
+}
+
+/* Boutons shadcn (toolbar, menus, etc.) — Moderne */
+body[data-ui-style='modern'] button[data-slot="button"]:hover {
+  background-color: color-mix(in oklch, var(--primary) 12%, transparent) !important;
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--primary) 25%, transparent);
+  border-radius: 10px;
+}
+body[data-ui-style='modern'] button[data-slot="button"]:hover svg {
+  color: var(--primary) !important;
+}
+/* Boutons bruts de la toolbar (icônes h-11 w-11, sans data-slot) */
+body[data-ui-style='modern'] .hover\:bg-accent:hover {
+  background-color: var(--hover-bg) !important;
+  border-radius: 10px !important;
 }
