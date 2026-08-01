@@ -15,6 +15,9 @@ import { isDemoMode } from './demo-mode';
 import { generateMessages } from './demo-data';
 import { selectedMessage, messageBody } from '../stores/messageStore';
 import { folderMessageCache } from '../stores/folder-message-cache';
+import { normalizeMessageForCache } from './sync-helpers'; // [CUSTOM FIX] reused read-only — see scheduleDexieSync
+import { db } from './db'; // [CUSTOM FIX]
+import { Local } from './storage'; // [CUSTOM FIX]
 
 const ALL_FOLDERS = ['INBOX', 'Sent', 'Drafts', 'Spam', 'Trash', 'Archive'];
 
@@ -37,8 +40,46 @@ function getMasterMessages(): any[] {
       }
     });
     masterMessages = all;
+    scheduleDexieSync(); // [CUSTOM FIX] initial snapshot → mirror into Dexie
   }
   return masterMessages;
+}
+
+// [CUSTOM FIX] Mirrors the demo message snapshot into IndexedDB (Dexie).
+//
+// Why: stores/searchStore.ts queries db.messages directly whenever a search
+// has no free-text term (e.g. toggling "Unread only" alone builds the query
+// "is:unread", which has text === ''). Demo mode never writes to Dexie by
+// design (see the "so skip the db.messages read/write entirely" comments in
+// mailboxStore.ts) — real messages are kept purely in-memory. That combo
+// meant is:unread / is:starred / has:attachment silently returned zero
+// results in demo mode, even though the visible list clearly had matches.
+//
+// Fix: keep Dexie in sync with our in-memory snapshot, using
+// normalizeMessageForCache — the exact same normalizer the real sync
+// pipeline uses — so is_unread / is_unread_index / is_starred / is_flagged /
+// has_attachment are always populated consistently. This requires zero
+// changes to any upstream file (messageStore.ts, mailboxStore.ts,
+// searchStore.ts, search-query.js, sync-helpers.ts all stay untouched).
+let dexieSyncScheduled = false;
+function scheduleDexieSync() {
+  if (dexieSyncScheduled) return;
+  dexieSyncScheduled = true;
+  Promise.resolve().then(async () => {
+    dexieSyncScheduled = false;
+    try {
+      const account = Local.get('email') || 'default';
+      const records = getMasterMessages().map((m) =>
+        normalizeMessageForCache(m, m.folder, account),
+      );
+      if (records.length) {
+        await db.messages.bulkPut(records);
+      }
+    } catch {
+      // Best-effort mirror. If this fails, local filter-only search simply
+      // falls back to zero results as before — nothing else breaks.
+    }
+  });
 }
 
 /**
@@ -116,6 +157,7 @@ export function installDemoMutationsOverlay() {
         const idx = list.findIndex((m) => String(m.id) === String(id));
         if (idx !== -1) {
           list.splice(idx, 1);
+          scheduleDexieSync(); // [CUSTOM FIX] keep Dexie mirror in sync after delete
         }
 
         clearReaderSelection();
@@ -135,6 +177,7 @@ export function installDemoMutationsOverlay() {
           msg.folder = params.folder;
           msg.mailbox = params.folder;
           clearReaderSelection();
+          scheduleDexieSync(); // [CUSTOM FIX] keep Dexie mirror in sync after move
         }
       }
       
@@ -151,7 +194,132 @@ export function installDemoMutationsOverlay() {
 
     if (action === 'MessageList') {
       const folder = params?.folder || params?.mailbox || params?.path || 'INBOX';
-      return listForFolder(folder);
+      let list = listForFolder(folder);
+
+      // CUSTOM: Analyse robuste de la recherche ou des filtres passés en paramètre
+      const searchParam = String(params?.search || params?.query || params?.q || '').toLowerCase();
+
+      const wantUnread = 
+        searchParam.includes('is:unread') || 
+        params?.is_unread || 
+        params?.unread || 
+        params?.isUnread || 
+        params?.unreadOnly || 
+        params?.filters?.is_unread || 
+        params?.filters?.unreadOnly ||
+        params?.filters?.isUnread;
+
+      const wantStarred = 
+        searchParam.includes('is:starred') || 
+        searchParam.includes('is:flagged') || 
+        params?.is_starred || 
+        params?.is_flagged || 
+        params?.isStarred || 
+        params?.starredOnly ||
+        params?.filters?.is_starred;
+
+      const wantAttachment = 
+        searchParam.includes('has:attachment') || 
+        params?.has_attachments || 
+        params?.hasAttachment || 
+        params?.hasAttachmentsOnly ||
+        params?.filters?.has_attachments;
+
+      const cleanQuery = searchParam
+        .replace(/is:unread/g, '')
+        .replace(/is:starred/g, '')
+        .replace(/is:flagged/g, '')
+        .replace(/has:attachment/g, '')
+        .trim();
+
+      list = list.filter((m) => {
+        const isUnread = !m.flags?.includes('\\Seen') && m.is_unread !== false;
+        const isStarred = m.is_starred || m.flags?.includes('\\Flagged');
+        const hasAttachment = m.has_attachment || m.attachments?.length > 0;
+
+        if (wantUnread && !isUnread) return false;
+        if (wantStarred && !isStarred) return false;
+        if (wantAttachment && !hasAttachment) return false;
+
+        if (cleanQuery) {
+          const matchSubject = m.subject?.toLowerCase().includes(cleanQuery);
+          const matchFrom = m.from?.toLowerCase().includes(cleanQuery);
+          const matchSnippet = m.snippet?.toLowerCase().includes(cleanQuery);
+          if (!matchSubject && !matchFrom && !matchSnippet) return false;
+        }
+
+        return true;
+      });
+
+      return list;
+    }
+
+    // CUSTOM: Intercepter l'action Search globale si elle est appelée
+    if (action === 'Search') {
+      const queryStr = String(params?.query || params?.q || '').toLowerCase();
+      const folder = params?.folder;
+      
+      const targetFolders = folder ? [folder] : ALL_FOLDERS;
+      
+      let allMessages: any[] = [];
+      targetFolders.forEach((f) => {
+        const msgs = listForFolder(f);
+        if (Array.isArray(msgs)) {
+          msgs.forEach((m) => allMessages.push({ ...m, folder: f, mailbox: f }));
+        }
+      });
+
+      const wantUnread = 
+        queryStr.includes('is:unread') || 
+        params?.is_unread || 
+        params?.unread || 
+        params?.isUnread || 
+        params?.unreadOnly || 
+        params?.filters?.is_unread || 
+        params?.filters?.unreadOnly ||
+        params?.filters?.isUnread;
+
+      const wantStarred = 
+        queryStr.includes('is:starred') || 
+        queryStr.includes('is:flagged') || 
+        params?.is_starred || 
+        params?.is_flagged || 
+        params?.isStarred || 
+        params?.starredOnly ||
+        params?.filters?.is_starred;
+
+      const wantAttachment = 
+        queryStr.includes('has:attachment') || 
+        params?.has_attachments || 
+        params?.hasAttachment || 
+        params?.hasAttachmentsOnly ||
+        params?.filters?.has_attachments;
+      
+      const cleanQuery = queryStr
+        .replace(/is:unread/g, '')
+        .replace(/is:starred/g, '')
+        .replace(/is:flagged/g, '')
+        .replace(/has:attachment/g, '')
+        .trim();
+
+      return allMessages.filter((m) => {
+        const isUnread = !m.flags?.includes('\\Seen') && m.is_unread !== false;
+        const isStarred = m.is_starred || m.flags?.includes('\\Flagged');
+        const hasAttachment = m.has_attachment || m.attachments?.length > 0;
+
+        if (wantUnread && !isUnread) return false;
+        if (wantStarred && !isStarred) return false;
+        if (wantAttachment && !hasAttachment) return false;
+
+        if (cleanQuery) {
+          const matchSubject = m.subject?.toLowerCase().includes(cleanQuery);
+          const matchFrom = m.from?.toLowerCase().includes(cleanQuery);
+          const matchSnippet = m.snippet?.toLowerCase().includes(cleanQuery);
+          if (!matchSubject && !matchFrom && !matchSnippet) return false;
+        }
+
+        return true;
+      });
     }
 
     if (action === 'Message' && params?.id) {
