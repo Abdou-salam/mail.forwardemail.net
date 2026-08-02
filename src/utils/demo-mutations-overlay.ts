@@ -18,6 +18,8 @@ import { folderMessageCache } from '../stores/folder-message-cache';
 import { normalizeMessageForCache } from './sync-helpers'; // [CUSTOM FIX] reused read-only — see scheduleDexieSync
 import { db } from './db'; // [CUSTOM FIX]
 import { Local } from './storage'; // [CUSTOM FIX]
+import { get } from 'svelte/store'; // [CUSTOM FIX]
+import { folders } from '../stores/folderStore'; // [CUSTOM FIX] see recomputeDemoFolderCounts
 
 const ALL_FOLDERS = ['INBOX', 'Sent', 'Drafts', 'Spam', 'Trash', 'Archive'];
 
@@ -80,6 +82,44 @@ function scheduleDexieSync() {
       // falls back to zero results as before — nothing else breaks.
     }
   });
+}
+
+// [CUSTOM FIX] Recomputes each folder's sidebar badge count directly from
+// the in-memory masterMessages snapshot, and pushes it into the `folders`
+// store (stores/folderStore.ts).
+//
+// Why: mailboxStore.ts's updateFolderUnreadCounts() — called after every
+// read/star toggle via toggleRead()/toggleStar() in mailboxActions.ts — is a
+// deliberate no-op in demo mode ("Demo mode is IndexedDB-free ... would
+// hang", see the isDemoMode() early-return there). The comment on that
+// early-return says demo badge counts are meant to be served by the Folders
+// interceptor below instead — but nothing ever re-triggers a Folders fetch
+// after a message is read/starred/deleted/moved in demo mode, so the
+// sidebar badge (Inbox "3", Spam "1", etc.) stayed frozen at its initial
+// value forever. This recomputes it ourselves, from the same snapshot that
+// already backs MessageList/Search/Message, so it's always in sync.
+//
+// Drafts is special-cased to show the total draft count rather than an
+// "unread" count (drafts have no meaningful read state), matching
+// Gmail/Outlook convention. Every other folder shows its unseen count.
+function recomputeDemoFolderCounts() {
+  const current = get(folders);
+  if (!current?.length) return;
+
+  const all = getMasterMessages();
+  const updated = current.map((f: any) => {
+    const path = f?.path;
+    if (!path) return f;
+    const inFolder = all.filter(
+      (m) => (m.folder || '').toUpperCase() === String(path).toUpperCase(),
+    );
+    const totalCount = inFolder.length;
+    const unseenCount = inFolder.filter((m) => !m.flags?.includes('\\Seen')).length;
+    const isDrafts = f.specialUse === '\\Drafts' || String(path).toLowerCase() === 'drafts';
+    return { ...f, count: isDrafts ? totalCount : unseenCount, totalCount };
+  });
+
+  folders.set(updated);
 }
 
 /**
@@ -158,10 +198,44 @@ export function installDemoMutationsOverlay() {
         if (idx !== -1) {
           list.splice(idx, 1);
           scheduleDexieSync(); // [CUSTOM FIX] keep Dexie mirror in sync after delete
+          recomputeDemoFolderCounts(); // [CUSTOM FIX] refresh sidebar badges after delete
         }
 
         clearReaderSelection();
         toastsRef?.show?.('Deleted', 'success');
+      }
+      return { ok: true, demo: true };
+    }
+
+    if (action === 'MessageUpdate' && Array.isArray(params?.flags)) {
+      // [CUSTOM FIX] Flag-only update: toggleRead()/toggleStar() in
+      // mailboxActions.ts both send { flags: [...], folder: msg.folder }
+      // (folder is always the message's CURRENT folder here, not a move
+      // target). Two problems this fixes at once:
+      //
+      // 1. Marking a message UNREAD sends flags:[] (empty array, once
+      //    \Seen is filtered out) alongside that same folder. The pre-fix
+      //    move-detection below (`params?.folder && !params?.flags?.length`)
+      //    treats an empty flags array the same as "no flags key" — so
+      //    unmarking read was silently mishandled as a folder move (wrong
+      //    "Moved" toast, reader closed). Checking Array.isArray(...) here,
+      //    before the move branch, catches every flags-bearing call
+      //    (empty or not) and handles it correctly instead.
+      // 2. masterMessages' flags were never updated for read/star toggles
+      //    at all (only MessageDelete/move mutated the snapshot), so the
+      //    sidebar unread badge — recomputed from masterMessages via
+      //    recomputeDemoFolderCounts — never reflected a message being
+      //    read, and is:unread / is:starred search filters could drift out
+      //    of sync with what the UI showed after a toggle.
+      const id = extractMessageId(params, options);
+      if (id) {
+        const list = getMasterMessages();
+        const msg = list.find((m) => String(m.id) === String(id));
+        if (msg) {
+          msg.flags = params.flags;
+          scheduleDexieSync();
+          recomputeDemoFolderCounts();
+        }
       }
       return { ok: true, demo: true };
     }
@@ -178,6 +252,7 @@ export function installDemoMutationsOverlay() {
           msg.mailbox = params.folder;
           clearReaderSelection();
           scheduleDexieSync(); // [CUSTOM FIX] keep Dexie mirror in sync after move
+          recomputeDemoFolderCounts(); // [CUSTOM FIX] refresh sidebar badges after move
         }
       }
       
