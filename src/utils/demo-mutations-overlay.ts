@@ -335,6 +335,21 @@ export function installDemoMutationsOverlay() {
       });
     }
 
+    if (action === 'AccountUpdate' && params?.settings?.label_settings) {
+      // [CUSTOM FIX] Label create/update/delete (settingsStore.ts::createLabel/
+      // updateLabel/deleteLabel) apply optimistically client-side — they update
+      // settingsLabels and cacheLabels() BEFORE this call — then persist via a
+      // generic Remote.request('AccountUpdate', { settings: { label_settings }}).
+      // demo-mode.js blocks ALL 'AccountUpdate' calls with a "not available in
+      // demo" toast (WRITE_ACTIONS), which fired here even though the label
+      // change already succeeded locally with nothing left to actually block.
+      // We detect label-only payloads via the label_settings key (the one shape
+      // settingsStore.ts uses exclusively for label mutations) and let just
+      // those through silently, leaving every other AccountUpdate (real account
+      // settings, e.g. signature/theme) blocked as before.
+      return { ok: true, demo: true };
+    }
+
     return original(action, params, options);
   };
 }
