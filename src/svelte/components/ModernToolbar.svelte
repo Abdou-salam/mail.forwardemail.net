@@ -58,45 +58,32 @@
     }
   }
 </script>
-
 <div class="fe-modern-toolbar-container flex items-center justify-between p-3 rounded-[24px] border transition-colors bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 text-zinc-900 dark:text-zinc-100">
-  <!-- Bouton Menu Hamburger (Mobile uniquement) -->
-  <button
-    class="inline-flex items-center justify-center h-10 w-10 md:hidden hover:bg-accent rounded-lg transition-colors"
-    type="button"
-    onclick={toggleSidebar}
-    aria-label="Toggle sidebar"
-  >
-    <span class="inline-flex transition-transform duration-200" class:rotate-90={sidebarOpen}>
-      <Menu class="h-5 w-5" />
-    </span>
-  </button>
-
-  <!-- Logo -->
+ <!-- Logo -->
   <div class="fe-modern-logo-area flex items-center gap-3">
-  <!-- BOUTON TOGGLE SIDEBAR REPRIS DE LA VERSION CLASSIQUE -->
-<Tooltip.Root>
-  <Tooltip.Trigger>
-    <button
-      class="inline-flex items-center justify-center h-10 w-10 rounded-xl hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors text-zinc-600 dark:text-zinc-400 { sidebarOpen ? 'bg-zinc-100 dark:bg-zinc-800' : '' }"
-      type="button"
-      aria-label="Toggle sidebar"
-      onclick={toggleSidebar}
-    >
-      <!-- Animation de rotation basée sur votre boolean sidebarOpen -->
-      <span class="inline-flex transition-transform duration-200 { sidebarOpen ? 'rotate-90' : '' }">
-        <Menu class="h-5 w-5" />
-      </span>
-    </button>
-  </Tooltip.Trigger>
-  <Tooltip.Content side="bottom">
-    <p>Afficher/Masquer la barre latérale</p>
-  </Tooltip.Content>
-</Tooltip.Root>
+    <Tooltip.Root>
+      <Tooltip.Trigger>
+        <button
+          class="inline-flex items-center justify-center h-10 w-10 rounded-xl hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors text-zinc-600 dark:text-zinc-400 { sidebarOpen ? 'bg-zinc-100 dark:bg-zinc-800' : '' }"
+          type="button"
+          aria-label="Toggle sidebar"
+          onclick={toggleSidebar}
+        >
+          <span class="inline-flex transition-transform duration-200 { sidebarOpen ? 'rotate-90' : '' }">
+            <Menu class="h-5 w-5" />
+          </span>
+        </button>
+      </Tooltip.Trigger>
+      <Tooltip.Content side="bottom">
+        <p>Afficher/Masquer la barre latérale</p>
+      </Tooltip.Content>
+    </Tooltip.Root>
 
-</div>
-
-
+    <div class="fe-modern-logo-icon">
+      <img src="{import.meta.env.BASE_URL}icons/logo-square.svg" alt="Forward Email" class="h-full w-full object-contain p-1.5" />
+    </div>
+    <span class="fe-modern-logo-text">Forward Email</span>
+  </div>
   <!-- Barre de recherche -->
  <!-- Barre de recherche Modernisée et Réparée -->
   <div class="fe-modern-search-wrapper" class:hidden={isMobile}>
@@ -119,6 +106,8 @@
       <span
         class="absolute right-2.5 top-1/2 -translate-y-1/2 h-3 w-3 animate-spin rounded-full border-2 border-border border-t-primary"
       ></span>
+      {:else}
+      <span class="fe-modern-search-badge">⌘K</span>
     {/if}
 
     <!-- Fenêtre de suggestions (Dropdown réglé) -->
