@@ -1,4 +1,5 @@
 import { writable, get } from 'svelte/store';
+import { installModernAvatarInjector } from '../utils/modern-avatar-injector'; // [CUSTOM]
 
 const KEY = 'fe:ui-style';
 export type UIStyle = 'classic' | 'modern';
@@ -17,6 +18,7 @@ export const uiStyle = writable<UIStyle>(readInitial());
 uiStyle.subscribe((value) => {
   if (typeof document === 'undefined') return;
   document.body.setAttribute('data-ui-style', value);
+  if (value === 'modern') installModernAvatarInjector(); // [CUSTOM]
   try {
     localStorage.setItem(KEY, value);
     localStorage.setItem('fe:card-view', value === 'modern' ? 'true' : 'false');
