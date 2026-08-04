@@ -27,7 +27,31 @@
     onDeleteFolder?: (folder: Folder) => void;
     onDeleteTag?: (tag: { name: string; color: string }) => void;
   } = $props();
-  
+
+  // [CUSTOM FIX] $foldersStore (passed in as `folders`) contains both system
+  // folders (Inbox, Drafts, Sent, Archive, Spam, Trash, Outbox) and
+  // user-created custom folders. This section should only ever show the
+  // custom ones — system folders already have their own dedicated rows in
+  // the classic folder list above this component.
+  const SYSTEM_FOLDER_PATHS = new Set([
+    'inbox',
+    'drafts',
+    'sent',
+    'archive',
+    'spam',
+    'junk',
+    'trash',
+    'outbox',
+  ]);
+
+  let customFolders = $derived(
+    folders.filter((f) => {
+      if (f.specialUse) return false; // IMAP special-use folders are always system folders
+      const path = String(f.path || '').toLowerCase();
+      return !SYSTEM_FOLDER_PATHS.has(path);
+    })
+  );
+
   export const tags = writable([{ name: 'Important', color: '#e1000f' }]);
 
   // --- ÉTATS D'AFFICHAGE DU COMPOSANT INJECTÉ ---
@@ -117,11 +141,11 @@
   
   <!-- SECTION DOSSIERS -->
   <div class="fe-group-title">
-    <span>Dossiers</span>
+    <span>Folders</span>
     <button 
       type="button" 
       class="fe-add-btn" 
-      aria-label="Ajouter un dossier"
+      aria-label="Add folder"
       onclick={handleAddFolderClick}
     >
       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
@@ -129,7 +153,7 @@
   </div>
 
   <div class="fe-sub-list">
-  {#each folders as folder (folder.id)}
+  {#each customFolders as folder (folder.id)}
     <div
       role="button"
       tabindex="0"
@@ -143,25 +167,25 @@
       <button 
         type="button" 
         class="fe-delete-inline-btn"
-        aria-label="Supprimer le dossier"
+        aria-label="Delete folder"
         onclick={(e) => handleDeleteFolderClick(e, folder)}
       >
         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
       </button>
     </div>
   {:else}
-    <div class="fe-empty-state">Aucun dossier</div>
+    <div class="fe-empty-state">No folders</div>
   {/each}
   </div>
 
   <!-- SECTION LIBELLÉS -->
   <div class="fe-group-title" style="margin-top: 16px;">
-    <span>Libellés</span>
+    <span>Labels</span>
     <button 
       type="button" 
       class="fe-add-btn" 
       onclick={handleCreateTag}
-      aria-label="Ajouter un libellé"
+      aria-label="Add label"
     >
       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
     </button>
@@ -176,14 +200,14 @@
         <button 
           type="button" 
           class="fe-delete-inline-btn"
-          aria-label="Supprimer le libellé"
+          aria-label="Delete label"
           onclick={(e) => handleDeleteTagClick(e, tag)}
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
         </button>
       </div>
     {:else}
-      <div class="fe-empty-state">Aucun libellé</div>
+      <div class="fe-empty-state">No labels</div>
     {/each}
   </div>
 

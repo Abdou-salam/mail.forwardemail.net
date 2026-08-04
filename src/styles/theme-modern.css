@@ -757,3 +757,25 @@ body[data-ui-style='modern'] .hover\:bg-accent:hover {
   background-color: var(--hover-bg) !important;
   border-radius: 10px !important;
 }
+body[data-ui-style='modern'] a[href*="my-account/billing"] {
+  border-radius: 12px;
+  transition: background-color 0.15s ease;
+}
+
+body[data-ui-style='modern'] a[href*="my-account/billing"]:hover {
+  background-color: var(--hover-bg) !important;
+}
+
+body[data-ui-style='modern'] a[href*="my-account/billing"] .h-1\.5 {
+  height: 6px !important;
+  background-color: #eef0f6 !important;
+}
+
+body[data-ui-style='modern'] a[href*="my-account/billing"] .bg-primary {
+  background: linear-gradient(90deg, #3b3bca, #6366f1) !important;
+  border-radius: 999px !important;
+}
+
+.dark body[data-ui-style='modern'] a[href*="my-account/billing"] .h-1\.5 {
+  background-color: #27272a !important;
+}
