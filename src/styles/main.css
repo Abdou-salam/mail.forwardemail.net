@@ -1,7 +1,6 @@
 @import 'tailwindcss';
-
 @import 'tw-animate-css';
-
+@import './theme-modern.css'; /* [CUSTOM FIX] */
 @custom-variant dark (&:is(.dark *));
 
 :root {

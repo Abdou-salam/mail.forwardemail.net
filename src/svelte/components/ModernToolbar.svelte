@@ -99,13 +99,10 @@
 
   <!-- Barre de recherche -->
  <!-- Barre de recherche Modernisée et Réparée -->
-  <div class="relative flex-1 md:max-w-[420px]" class:hidden={isMobile}>
-    <Search
-      class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground"
-    />
-    <input
-      type="search"
-      class="pl-9 pr-8 h-9 w-full bg-background border border-border rounded-md text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+  <div class="fe-modern-search-wrapper" class:hidden={isMobile}>
+  <Search class="fe-modern-search-icon" />
+  <input
+    class="fe-modern-search-input"
       placeholder="Search mail"
       title="Search mail (Ctrl+K)"
       value={$query}
