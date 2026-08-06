@@ -805,3 +805,64 @@ body[data-ui-style='modern'] [data-testid='message-row'] .fe-row-avatar {
 body[data-ui-style='modern'] [data-testid='message-row'] > .flex.min-w-0.flex-col {
   order: 2 !important;
 }
+/* ============================================
+   HIÉRARCHIE TYPOGRAPHIQUE — lignes de messages (Moderne)
+   Expéditeur > Objet > Aperçu, avec un contraste de poids et de
+   taille plus marqué qu'en Classique, cohérent avec Inter déjà
+   utilisé pour le header/sidebar.
+   ============================================ */
+
+/* Nom de l'expéditeur — 1ère ligne de contenu */
+body[data-ui-style='modern'] [data-testid='message-row'] .flex.min-w-0.flex-col > div:nth-child(1) .truncate {
+  font-family: 'Inter', -apple-system, sans-serif;
+  font-size: 14px;
+  letter-spacing: -0.01em;
+}
+
+body[data-ui-style='modern'] [data-testid='message-row'][data-unread='true'] .flex.min-w-0.flex-col > div:nth-child(1) .truncate {
+  font-weight: 700 !important;
+  color: var(--foreground);
+}
+
+body[data-ui-style='modern'] [data-testid='message-row'][data-unread='false'] .flex.min-w-0.flex-col > div:nth-child(1) .truncate {
+  font-weight: 500 !important;
+  color: color-mix(in oklch, var(--foreground) 78%, transparent);
+}
+
+/* Objet — 2ème ligne de contenu */
+body[data-ui-style='modern'] [data-testid='message-row'] .flex.min-w-0.flex-col > div:nth-child(2) {
+  font-family: 'Inter', -apple-system, sans-serif;
+  font-size: 13.5px;
+  line-height: 1.4;
+}
+
+body[data-ui-style='modern'] [data-testid='message-row'][data-unread='true'] .flex.min-w-0.flex-col > div:nth-child(2) {
+  font-weight: 600 !important;
+}
+
+body[data-ui-style='modern'] [data-testid='message-row'][data-unread='false'] .flex.min-w-0.flex-col > div:nth-child(2) {
+  font-weight: 400 !important;
+  color: color-mix(in oklch, var(--foreground) 85%, transparent);
+}
+
+/* Aperçu — 3ème ligne de contenu, toujours discret */
+body[data-ui-style='modern'] [data-testid='message-row'] .flex.min-w-0.flex-col > div:nth-child(3) {
+  font-family: 'Inter', -apple-system, sans-serif;
+  font-size: 12.5px;
+  font-weight: 400 !important;
+  color: color-mix(in oklch, var(--muted-foreground) 90%, transparent);
+  opacity: 0.85;
+}
+
+/* Date — alignée avec le même système, plus discrète */
+body[data-ui-style='modern'] [data-testid='message-row'] .shrink-0.text-xs {
+  font-family: 'Inter', -apple-system, sans-serif;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: color-mix(in oklch, var(--muted-foreground) 80%, transparent);
+}
+
+/* Un peu plus d'air vertical entre les 3 lignes de contenu */
+body[data-ui-style='modern'] [data-testid='message-row'] .flex.min-w-0.flex-col {
+  gap: 3px !important;
+}
