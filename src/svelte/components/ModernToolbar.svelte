@@ -10,6 +10,7 @@
   import Lock from '@lucide/svelte/icons/lock';
   import * as Tooltip from '$lib/components/ui/tooltip'; 
   import ThemeStyleToggle from './ThemeStyleToggle.svelte';
+  import { folders } from '../../stores/folderStore';
 
   // --- PROPS ---
   export let toggleSidebar: () => void;
@@ -57,6 +58,22 @@
       window.location.href = path;
     }
   }
+  // [CUSTOM] Total unread across all folders, same source of truth as the
+// sidebar's per-folder badges (folderStore.ts's `count` field, kept fresh
+// by demo-mutations-overlay.ts's recomputeDemoFolderCounts). Drafts is
+// excluded because its `count` represents the *total* draft count, not an
+// unread count (see the isDrafts special-case there) — including it would
+// inflate this badge with numbers that aren't actually unread messages.
+//
+// `count`/`totalCount` are added onto Folder objects at runtime by
+// demo-mutations-overlay.ts and aren't part of the upstream Folder type
+// (types/folder.ts), hence the local cast instead of extending that type.
+$: totalUnread = ($folders || []).reduce((sum, f) => {
+  const folder = f as unknown as { specialUse?: string; path?: string; count?: number };
+  const isDrafts = folder.specialUse === '\\Drafts' || String(folder.path || '').toLowerCase() === 'drafts';
+  if (isDrafts) return sum;
+  return sum + (Number(folder.count) || 0);
+}, 0);
 </script>
 <div class="fe-modern-toolbar-container flex items-center justify-between p-3 rounded-[24px] border transition-colors bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 text-zinc-900 dark:text-zinc-100">
  <!-- Logo -->
@@ -190,7 +207,9 @@
       <ThemeStyleToggle />
     </div>
 
-    <div class="fe-modern-notification-badge">2</div>
+    {#if totalUnread > 0}
+      <div class="fe-modern-notification-badge">{totalUnread > 99 ? '99+' : totalUnread}</div>
+    {/if}
 
     <!-- Profil -->
 <button 
